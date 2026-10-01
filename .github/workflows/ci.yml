@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # the oldest Python pyproject.toml claims, and the one we run
+        python-version: ['3.9', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Installed the way a user gets it, not editable: what is tested is what
+      # the wheel contains.
+      - name: Install the package
+        run: pip install .
+
+      - name: Tests
+        run: |
+          pdatum --version
+          python -m unittest discover -s tests -v
