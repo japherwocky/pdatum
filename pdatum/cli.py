@@ -12,7 +12,7 @@ stdout and progress to stderr, in either mode, so they can be piped straight
 into a file or another tool.
 """
 
-import errno
+import json
 import os
 import sys
 from typing import Optional
@@ -27,8 +27,10 @@ from pdatum.output import (
     console,
     emit,
     emit_error,
+    esc,
     line,
     progress,
+    run_quietly,
     set_json_output,
 )
 
@@ -138,6 +140,17 @@ def jobs_count(
     emit(body["data"], lambda: console.print(f"{body['data']['count']:,}"))
 
 
+def fact_value(value):
+    """A fact's value for a person: text as it is, anything structured as JSON.
+
+    str() of a list or dict is a Python repr (single quotes, True, None), which
+    is neither what the API returned nor something to paste into jq.
+    """
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
 def job_table(jobs):
     table = Table(show_edge=False, pad_edge=False)
     for column in ("id", "posted", "company", "position", "location"):
@@ -146,8 +159,8 @@ def job_table(jobs):
         table.add_row(
             str(j["id"]),
             timespec.show(j["posted_at"] or j["first_seen_at"])[:10],
-            j["company"] or "", j["position"] or "",
-            (j["location"] or "") + (" (remote)" if j["remote"] else ""),
+            esc(j["company"] or ""), esc(j["position"] or ""),
+            esc((j["location"] or "") + (" (remote)" if j["remote"] else "")),
         )
     return table
 
@@ -181,16 +194,16 @@ def jobs_get(job_id: int = typer.Argument(..., help="The job's id.")):
 
     def render():
         state = "open" if job["open"] else "[red]closed[/red]"
-        console.print(f"[bold]{job['position']}[/bold] -- {job['company'] or '?'} ({state})")
+        console.print(f"[bold]{esc(job['position'])}[/bold] -- {esc(job['company'] or '?')} ({state})")
         console.print(
-            f"{job['location'] or 'no location'}{' - remote' if job['remote'] else ''}  |  "
+            f"{esc(job['location'] or 'no location')}{' - remote' if job['remote'] else ''}  |  "
             f"posted {timespec.show(job['posted_at'])}  |  "
             f"first seen {timespec.show(job['first_seen_at'])}"
         )
         if job["salary_min"] or job["salary_max"]:
             console.print(f"salary {job['salary_min'] or '?'}-{job['salary_max'] or '?'} "
-                          f"{job['salary_currency']}")
-        console.print(f"apply: {job['application_url']}")
+                          f"{esc(job['salary_currency'])}")
+        console.print(f"apply: {esc(job['application_url'])}")
         console.print()
         console.print(job["description"], markup=False)
 
@@ -278,7 +291,7 @@ def employers_list(
             table.add_column(column, overflow="fold")
         for e in body["data"]:
             table.add_row(
-                e["slug"], e["name"], e["domain"] or "",
+                esc(e["slug"]), esc(e["name"]), esc(e["domain"] or ""),
                 str(sum(e["open_postings"].values())), hiring_word(e["hiring"]),
             )
         console.print(table)
@@ -306,15 +319,15 @@ def employers_get(slug: str = typer.Argument(..., help="The employer's slug.")):
     e = client().get(f"/employers/{slug}")["data"]
 
     def render():
-        console.print(f"[bold]{e['name']}[/bold] ({e['slug']})  {e['domain'] or ''}")
+        console.print(f"[bold]{esc(e['name'])}[/bold] ({esc(e['slug'])})  {esc(e['domain'] or '')}")
         postings = ", ".join(f"{b} {n}" for b, n in e["open_postings"].items())
-        console.print(f"open jobs: {postings}  |  hiring: {hiring_word(e['hiring'])}")
+        console.print(f"open jobs: {esc(postings)}  |  hiring: {hiring_word(e['hiring'])}")
         if e["facts"]:
             table = Table(show_edge=False, pad_edge=False, title="facts")
             for column in ("key", "value", "source", "observed"):
                 table.add_column(column, overflow="fold")
             for f in e["facts"]:
-                table.add_row(f["key"], str(f["value"]), f["source"],
+                table.add_row(esc(f["key"]), esc(fact_value(f["value"])), esc(f["source"]),
                               timespec.show(f["observed_at"]))
             console.print(table)
         else:
@@ -333,8 +346,8 @@ def me():
 
     def render():
         _, source = config.api_key()
-        console.print(f"[bold]{data['name']}[/bold] -- {data['holder']}")
-        console.print(f"key {data['prefix']}... from {source}; scopes: {' '.join(data['scopes'])}")
+        console.print(f"[bold]{esc(data['name'])}[/bold] -- {esc(data['holder'])}")
+        console.print(f"key {esc(data['prefix'])}... from {esc(source)}; scopes: {esc(' '.join(data['scopes']))}")
         console.print(f"expires {timespec.show(data['expires_at'])}")
         for period, used in data["usage"].items():
             console.print(f"{period.replace('_', ' ')}: {used['requests']:,} requests, "
@@ -351,7 +364,7 @@ def key_save(key: str = typer.Argument(..., help="The key you were issued.")):
     emit(
         {"saved": str(config.config_path()), "key": data},
         lambda: console.print(
-            f"Saved {data['prefix']}... ({data['name']}) to {config.config_path()}"
+            f"Saved {esc(data['prefix'])}... ({esc(data['name'])}) to {esc(config.config_path())}"
         ),
     )
 
@@ -361,7 +374,7 @@ def key_clear():
     """Forget the saved key. It still works until it is revoked."""
     had = config.clear_key()
     emit({"cleared": had}, lambda: console.print(
-        f"Cleared the key from {config.config_path()}" if had else "No key was saved."
+        f"Cleared the key from {esc(config.config_path())}" if had else "No key was saved."
     ))
 
 
@@ -379,7 +392,7 @@ def cmd_config(
         "key": config.display_key(key),
         "key_from": source,
     }
-    emit(data, lambda: [console.print(f"{k}: {v}") for k, v in data.items()])
+    emit(data, lambda: [console.print(f"{k}: {esc(v)}") for k, v in data.items()])
 
 
 SKILL = """\
@@ -482,6 +495,13 @@ def main(argv=None):
     if key is not None:
         config.set_runtime_key(key)
 
+    status = run_quietly(lambda: _run(argv))
+    if status:
+        raise SystemExit(status)
+
+
+def _run(argv):
+    """Run the command line, turning the CLI's own failures into an exit status."""
     try:
         # Click expands ~ and wildcards in every argument on Windows, standing
         # in for a shell that does not: "~4,100" becomes a home directory and
@@ -493,28 +513,6 @@ def main(argv=None):
         raise SystemExit(1)
     except KeyboardInterrupt:
         raise SystemExit(130)
-    except OSError as e:
-        if not _reader_left(e):
-            raise
-        # `pdatum jobs pull | head`: the reader left, which is not an error.
-        # Point stdout at nothing, or Python's own flush at exit raises the
-        # same error again and prints it.
-        try:
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
-        except (OSError, ValueError):
-            pass
-        raise SystemExit(0)
-
-
-def _reader_left(error):
-    """
-    Whether an OSError means whoever was reading stdout has gone. POSIX says
-    so with EPIPE; Windows says EINVAL when the pipe's far end is closed.
-    """
-    if isinstance(error, BrokenPipeError):
-        return True
-    return os.name == "nt" and error.errno == errno.EINVAL
 
 
 if __name__ == "__main__":
