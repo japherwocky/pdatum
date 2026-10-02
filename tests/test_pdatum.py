@@ -441,6 +441,20 @@ def pdatum_process(*args, stdout, stderr):
     )
 
 
+def assert_quiet_exit(case, done, windows_status, posix_statuses):
+    """No 120 on any platform; the status exact where this code decides it.
+
+    On Windows a closed pipe is EINVAL, which rich and Click do not know, so the
+    status is ours: before this it was 120 for stderr. On POSIX they already turn
+    EPIPE into a quiet exit 1 themselves, and what they choose is not ours to pin.
+    """
+    case.assertNotEqual(done.returncode, 120)
+    if os.name == "nt":
+        case.assertEqual(done.returncode, windows_status)
+    else:
+        case.assertIn(done.returncode, posix_statuses)
+
+
 class ReaderLeftTestCase(unittest.TestCase):
     """`pdatum ... | head`: the reader goes, and that is not a crash.
 
@@ -455,8 +469,8 @@ class ReaderLeftTestCase(unittest.TestCase):
             done = pdatum_process("--help", stdout=stdout, stderr=subprocess.PIPE)
         finally:
             os.close(stdout)
-        self.assertEqual(done.returncode, 0, done.stderr.decode(errors="replace"))
-        self.assertEqual(done.stderr, b"")
+        self.assertEqual(done.stderr, b"", done.stderr.decode(errors="replace"))
+        assert_quiet_exit(self, done, windows_status=0, posix_statuses=(0, 1))
 
     def test_a_short_output_that_fails_in_the_final_flush_is_quiet_too(self):
         stdout = dead_pipe()
@@ -464,8 +478,8 @@ class ReaderLeftTestCase(unittest.TestCase):
             done = pdatum_process("--version", stdout=stdout, stderr=subprocess.PIPE)
         finally:
             os.close(stdout)
-        self.assertEqual(done.returncode, 0, done.stderr.decode(errors="replace"))
-        self.assertEqual(done.stderr, b"")
+        self.assertEqual(done.stderr, b"", done.stderr.decode(errors="replace"))
+        assert_quiet_exit(self, done, windows_status=0, posix_statuses=(0, 1))
 
     def test_a_reader_that_left_stderr_keeps_the_commands_own_status(self):
         """A usage error is status 2; a closed stderr must not turn it into 120."""
@@ -474,8 +488,8 @@ class ReaderLeftTestCase(unittest.TestCase):
             done = pdatum_process("--no-such-option", stdout=subprocess.PIPE, stderr=stderr)
         finally:
             os.close(stderr)
-        self.assertEqual(done.returncode, 2)
         self.assertEqual(done.stdout, b"")
+        assert_quiet_exit(self, done, windows_status=2, posix_statuses=(1, 2))
 
     def test_run_quietly_returns_the_status_the_command_exits_with(self):
         def fails():
