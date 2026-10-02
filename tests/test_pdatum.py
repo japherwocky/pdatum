@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pdatum import cli, config, timespec  # noqa: E402
 from pdatum.client import MAX_RETRIES, Client, PdatumError  # noqa: E402
+from pdatum.output import reader_left, run_quietly  # noqa: E402
 
 KEY = "pdatum_" + "k" * 32
 
@@ -320,6 +322,193 @@ class CommandTestCase(Isolated):
         self.assertIn("# pdatum API", out)
         self.assertEqual(session.calls[0][0], "/docs")
         self.assertNotIn("Authorization", session.headers)
+
+
+# Text a crawled job or a user can really contain: a lowercase tag rich would
+# swallow, a closing tag that matches nothing, markup that must stay literal.
+HOSTILE = ["Nurse [per diem]", "[remote] Analyst", "Q3 [/x] plan", "[red]not red[/red]"]
+
+
+class HostileTextTestCase(Isolated):
+    """rich reads [brackets] as markup. Nothing printed may be altered by that."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def job(self, name):
+        return {
+            "id": 7, "posted_at": 1788220800, "first_seen_at": 1788220800,
+            "company": name, "position": name, "location": name, "remote": False,
+            "open": True, "salary_min": None, "salary_max": None, "salary_currency": name,
+            "application_url": "https://example.com/?a[b]=" + name, "description": name,
+        }
+
+    def test_job_listing_and_job_detail_print_as_written(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "jobs", "search", answer=pages_of([self.job(name)], 20))
+                self.assertEqual(code, 0, err)
+                self.assertGreaterEqual(out.count(name), 1, out)
+
+                code, out, err, _ = self.run_cli(
+                    "jobs", "get", "7",
+                    answer=lambda p, q: FakeResponse(body={"data": self.job(name)}))
+                self.assertEqual(code, 0, err)
+                self.assertGreaterEqual(out.count(name), 3, out)  # position, company, location
+
+    def employer(self, name):
+        return {
+            "slug": "acme", "name": name, "domain": name, "hiring": True,
+            "open_postings": {"jobwolverine": 1},
+            "facts": [{"key": name, "value": name, "source": name, "observed_at": 1788220800}],
+        }
+
+    def test_employer_listing_and_detail_print_as_written(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "employers", "list", answer=pages_of([self.employer(name)], 20))
+                self.assertEqual(code, 0, err)
+                self.assertIn(name, out)
+
+                code, out, err, _ = self.run_cli(
+                    "employers", "get", "acme",
+                    answer=lambda p, q: FakeResponse(body={"data": self.employer(name)}))
+                self.assertEqual(code, 0, err)
+                self.assertGreaterEqual(out.count(name), 4, out)  # name, key, value, source
+
+    def test_a_structured_fact_value_is_json_not_a_python_repr(self):
+        value = [{"board": "10xgenomics", "how": "crawled", "jobs": 34, "ok": True, "x": None}]
+        e = self.employer("Acme")
+        e["facts"] = [{"key": "job_boards", "value": value, "source": "feeds",
+                       "observed_at": 1788220800}]
+        code, out, err, _ = self.run_cli(
+            "employers", "get", "acme", answer=lambda p, q: FakeResponse(body={"data": e}))
+        self.assertEqual(code, 0, err)
+        # The table folds a long cell across lines, so look for short tokens
+        # that cannot be split: JSON's spelling, not Python's.
+        for token in ('"crawled"', '"ok":', "true", "null"):
+            self.assertIn(token, out)
+        for token in ("'board'", "True", "None"):
+            self.assertNotIn(token, out)
+
+    def test_fact_value_keeps_text_and_writes_the_rest_as_json(self):
+        self.assertEqual(cli.fact_value("kula"), "kula")
+        self.assertEqual(cli.fact_value(34), "34")
+        self.assertEqual(cli.fact_value(True), "true")
+        self.assertEqual(cli.fact_value(None), "null")
+        value = [{"board": "10xgenomics", "ok": True}]
+        self.assertEqual(cli.fact_value(value), json.dumps(value))
+
+    def test_an_error_message_is_not_markup_and_goes_to_stderr(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "jobs", "count", answer=lambda p, q: FakeResponse(
+                        400, {"error": {"code": "invalid_parameter",
+                                        "message": f"limit: expected a number, got {name!r}"}}))
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertIn(name, err)
+
+    def test_an_error_is_not_reflowed_to_the_terminal_width(self):
+        os.environ.pop("PDATUM_API_KEY")
+        with patch.dict(os.environ, {"COLUMNS": "40"}):
+            code, out, err, _ = self.run_cli("jobs", "count")
+        self.assertEqual(code, 1)
+        self.assertIn("pdatum key save <key>", err)  # on one line, not split at 40 columns
+
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def dead_pipe():
+    """A pipe's write end with nobody holding the read end: every write fails."""
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    return write_end
+
+
+def pdatum_process(*args, stdout, stderr):
+    env = dict(os.environ, PYTHONPATH=str(REPO), PDATUM_CONFIG_PATH=os.devnull)
+    for name in ("PDATUM_API_KEY", "PDATUM_URL", "PDATUM_OUTPUT"):
+        env.pop(name, None)
+    return subprocess.run(
+        [sys.executable, "-m", "pdatum", *args],
+        stdout=stdout, stderr=stderr, env=env, timeout=60,
+    )
+
+
+def assert_quiet_exit(case, done, windows_status, posix_statuses):
+    """No 120 on any platform; the status exact where this code decides it.
+
+    On Windows a closed pipe is EINVAL, which rich and Click do not know, so the
+    status is ours: before this it was 120 for stderr. On POSIX they already turn
+    EPIPE into a quiet exit 1 themselves, and what they choose is not ours to pin.
+    """
+    case.assertNotEqual(done.returncode, 120)
+    if os.name == "nt":
+        case.assertEqual(done.returncode, windows_status)
+    else:
+        case.assertIn(done.returncode, posix_statuses)
+
+
+class ReaderLeftTestCase(unittest.TestCase):
+    """`pdatum ... | head`: the reader goes, and that is not a crash.
+
+    Left alone the next write raises, usually in the interpreter's final flush
+    where no handler is waiting: a traceback, and exit status 120. These run the
+    real CLI in a subprocess against a pipe that nobody is reading.
+    """
+
+    def test_a_reader_that_left_stdout_is_not_an_error(self):
+        stdout = dead_pipe()
+        try:
+            done = pdatum_process("--help", stdout=stdout, stderr=subprocess.PIPE)
+        finally:
+            os.close(stdout)
+        self.assertEqual(done.stderr, b"", done.stderr.decode(errors="replace"))
+        assert_quiet_exit(self, done, windows_status=0, posix_statuses=(0, 1))
+
+    def test_a_short_output_that_fails_in_the_final_flush_is_quiet_too(self):
+        stdout = dead_pipe()
+        try:
+            done = pdatum_process("--version", stdout=stdout, stderr=subprocess.PIPE)
+        finally:
+            os.close(stdout)
+        self.assertEqual(done.stderr, b"", done.stderr.decode(errors="replace"))
+        assert_quiet_exit(self, done, windows_status=0, posix_statuses=(0, 1))
+
+    def test_a_reader_that_left_stderr_keeps_the_commands_own_status(self):
+        """A usage error is status 2; a closed stderr must not turn it into 120."""
+        stderr = dead_pipe()
+        try:
+            done = pdatum_process("--no-such-option", stdout=subprocess.PIPE, stderr=stderr)
+        finally:
+            os.close(stderr)
+        self.assertEqual(done.stdout, b"")
+        assert_quiet_exit(self, done, windows_status=2, posix_statuses=(1, 2))
+
+    def test_run_quietly_returns_the_status_the_command_exits_with(self):
+        def fails():
+            raise SystemExit(3)
+
+        self.assertEqual(run_quietly(fails), 3)
+        self.assertEqual(run_quietly(lambda: None), 0)
+
+    def test_run_quietly_still_raises_an_error_that_is_not_a_reader_leaving(self):
+        def broken():
+            raise PermissionError("not a pipe")
+
+        with self.assertRaises(PermissionError):
+            run_quietly(broken)
+
+    def test_reader_left_means_a_closed_pipe_and_nothing_else(self):
+        self.assertTrue(reader_left(BrokenPipeError()))
+        self.assertFalse(reader_left(PermissionError()))
+        self.assertFalse(reader_left(FileNotFoundError()))
 
 
 if __name__ == "__main__":

@@ -47,15 +47,26 @@ repository and `publish-pypi.yml`. Renaming either breaks releases.
 ## Conventions
 
 `pkanban` (https://github.com/japherwocky/pkanban) is the model this CLI
-copies. Fix a shortcoming there first, then port it. These are its fixes, and
-all three have regressed before:
+copies. Fix a shortcoming there first, then port it. The same rules hold in
+both, and each has regressed before:
 
 - Click's Windows `~`/glob expansion is off (`windows_expand_args=False`), so
   `~` and `*` in an argument arrive untouched.
 - `--json` and `--api-key` are never taken from another option's value or
   from after `--`.
-- A closed pipe (`| head`) exits quietly. On Windows it arrives as EINVAL,
-  not EPIPE.
+- **A reader that leaves is not a crash.** `output.run_quietly()` wraps the
+  whole command: `| head` ends it with its own status, not a traceback and
+  120. On Windows a closed pipe arrives as EINVAL, not EPIPE. It covers stderr
+  as well as stdout (a usage error piped through `2>&1 | head` exits 2), and it
+  flushes deliberately at the end, because a short output only fails there.
+  pkanban had none of this until its PR #87; do not assume it has been merged
+  when porting.
+- **Text from the server or the user goes through `esc()`** on its way into
+  rich: an f-string for `console.print`, and every cell of a `Table`, which
+  parses markup too. `[per diem]` would print as nothing and `[/x]` raises
+  MarkupError. `markup=False` and `Text.append()` are the other safe routes.
+- **Errors go to stderr**, escaped and never soft-wrapped at the terminal width,
+  so a command in an error message can be copied whole.
 
 Streams (`pull`, `changes`) are JSON lines on stdout and progress goes to
 stderr, so a pipe can be trusted to carry data only.
