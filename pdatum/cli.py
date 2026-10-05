@@ -43,8 +43,13 @@ app = typer.Typer(
 jobs_app = typer.Typer(help="Job postings.", no_args_is_help=True)
 employers_app = typer.Typer(help="Employer records, with facts and their sources.", no_args_is_help=True)
 key_app = typer.Typer(help="Store or forget your API key.", no_args_is_help=True)
+bdc_app = typer.Typer(
+    help="BDC books: what a lender reports lending, read from its SEC filings, by ticker.",
+    no_args_is_help=True,
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(employers_app, name="employers")
+app.add_typer(bdc_app, name="bdc")
 app.add_typer(key_app, name="key")
 
 
@@ -336,6 +341,99 @@ def employers_get(slug: str = typer.Argument(..., help="The employer's slug.")):
     emit(e, render)
 
 
+# -- BDC books ----------------------------------------------------------------------
+
+TICKER = typer.Argument(..., help="The lender's ticker, e.g. WHF, or its CIK.")
+
+
+def book_path(ticker, table=None):
+    from urllib.parse import quote
+
+    path = "/bdc/books/" + quote(ticker.strip().upper(), safe="")
+    return path + "/" + table if table else path
+
+
+@bdc_app.command("request")
+def bdc_request(ticker: str = TICKER):
+    """Ask for a lender's book. A lender not read before takes a while; follow it with: pdatum bdc book."""
+    data = client().post("/bdc/books", {"ticker": ticker})["data"]
+    emit(data, lambda: console.print(
+        f"{esc(data['ticker'])}: {esc(data['status'])}. "
+        f"Follow it with: pdatum bdc book {esc(data['ticker'])}"
+    ))
+
+
+def show_book(data):
+    if "version" not in data:
+        console.print(f"{esc(data['ticker'])}: {esc(data['status'])}, not read yet")
+        return
+    as_of = timespec.show(data["as_of"])[:10] if data["as_of"] else "-"
+    console.print(f"[bold]{esc(data['name'])}[/bold] ({esc(data['ticker'])})  "
+                  f"{esc(data['status'])}  version {esc(data['version'])}")
+    console.print(f"{data['quarters']} quarters to {as_of}; "
+                  f"recorded {timespec.show(data['recorded_at'])}")
+    table = Table(show_edge=False, pad_edge=False)
+    for column in ("table", "rows"):
+        table.add_column(column)
+    for name, meta in data["tables"].items():
+        table.add_row(esc(name), f"{meta['rows']:,}")
+    console.print(table)
+    for caveat in data.get("caveats", []):
+        console.print(f"- {esc(caveat)}", soft_wrap=True)
+    if data.get("request"):
+        console.print(f"[dim]a newer read is {esc(data['request']['status'])}[/dim]")
+
+
+@bdc_app.command("book")
+def bdc_book(
+    ticker: str = TICKER,
+    recorded_at: Optional[str] = typer.Option(
+        None, "--recorded-at", help="The book as we held it then: 2026-09-01, 7d, or epoch seconds."),
+):
+    """A lender's book: its status, version, tables, and the caveats to read first."""
+    data = client().get(book_path(ticker), recorded_at=when(recorded_at, "--recorded-at"))["data"]
+    emit(data, lambda: show_book(data))
+
+
+@bdc_app.command("pull")
+def bdc_pull(
+    ticker: str = TICKER,
+    out: Optional[str] = typer.Option(
+        None, "--out", "-o", help="The folder to write to; TICKER-VERSION if omitted."),
+    version: Optional[str] = typer.Option(
+        None, "--book-version", help="Refuse unless the book is at this version (from: pdatum bdc book)."),
+):
+    """
+    Write a lender's whole book to a folder: manifest.json and one JSON-lines
+    file per table, each checked against the manifest. Progress goes to stderr.
+    """
+    c = client()
+    data = c.get(book_path(ticker))["data"]
+    if "version" not in data:
+        raise PdatumError(f"{data['ticker']} has no book yet: it is {data['status']}. "
+                          f"Follow it with: pdatum bdc book {data['ticker']}")
+    if version and version != data["version"]:
+        raise PdatumError(f"{data['ticker']}'s book is at version {data['version']}, not {version}. "
+                          "Pull it without --book-version for the current one.")
+    folder = out or f"{data['ticker'].lower()}-{data['version']}"
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
+    written = {}
+    for name, meta in data["tables"].items():
+        digest, rows, _ = c.download(book_path(data["ticker"], name),
+                                     os.path.join(folder, name + ".jsonl"),
+                                     version=data["version"])
+        if digest != meta["sha256"]:
+            raise PdatumError(f"{name} arrived different from what the manifest promises "
+                              f"(sha256 {digest[:12]}, expected {meta['sha256'][:12]}). Pull again.")
+        written[name] = rows
+        progress(f"{name}: {rows:,} rows")
+    result = {"folder": folder, "ticker": data["ticker"], "version": data["version"],
+              "tables": written}
+    emit(result, lambda: console.print(folder, markup=False, soft_wrap=True))
+
+
 # -- the key, the server, and you ------------------------------------------------
 
 
@@ -418,6 +516,13 @@ Every fact names its source. hiring is true, false, or null (unknown).
 Stay in sync: pdatum jobs changes --since 2026-09-01 > delta.jsonl
   Upsert each line by id; "open": false means the job closed.
   The last stderr line gives the --since to use next time.
+
+BDC books -- what a lender reports lending, from its SEC filings, by ticker:
+  pdatum bdc book WHF            status, version, tables, and caveats: read those first
+  pdatum bdc pull WHF --out whf  manifest.json + one JSON-lines file per table
+  pdatum bdc request SCM         a lender not read yet; reading one takes a while
+Quote the figures table (key, value, unit, definition) rather than doing
+arithmetic on positions. The same version is the same data; cache on it.
 
 Times take 2026-09-01, 7d / 12h / 30m, or epoch seconds.
 Every command takes --json; errors go to stderr, exit code non-zero.

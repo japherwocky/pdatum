@@ -36,6 +36,11 @@ class FakeResponse:
             raise ValueError("no JSON")
         return self._body
 
+    def iter_content(self, chunk_size=1):
+        data = self.text.encode("utf-8")
+        for start in range(0, len(data), 7):  # small chunks, so a line can span two
+            yield data[start:start + 7]
+
 
 class FakeSession:
     """Answers from a function of (path, params); records every call."""
@@ -44,10 +49,17 @@ class FakeSession:
         self.answer = answer
         self.headers = {}
         self.calls = []
+        self.posted = []
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, stream=False):
         path = url.split("/api/v1", 1)[1]
         self.calls.append((path, dict(params or {})))
+        return self.answer(path, dict(params or {}))
+
+    def post(self, url, params=None, json=None, timeout=None):
+        path = url.split("/api/v1", 1)[1]
+        self.calls.append((path, dict(params or {})))
+        self.posted.append(json)
         return self.answer(path, dict(params or {}))
 
 
@@ -513,3 +525,102 @@ class ReaderLeftTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BookTestCase(Isolated):
+    """pdatum bdc: a lender's book, by ticker (wolverine card #906)."""
+
+    VERSION = "87adfe96d67108e288f5"
+    TABLES = {
+        "positions": '{"as_of":1,"company":"acme","mark":90.0}\n{"as_of":2,"company":"acme","mark":88.5}\n',
+        "figures": '{"key":"totals.nav","unit":"usd","value":252812000}\n',
+    }
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def manifest(self, **changes):
+        import hashlib
+
+        data = {
+            "ticker": "WHF", "lender": "whf", "name": "WhiteHorse Finance, Inc.",
+            "status": "ready", "version": self.VERSION, "recorded_at": 1791161463,
+            "as_of": 1782777600, "quarters": 16, "request": None,
+            "caveats": ["Other lenders mark 17% [per diem] of this book."],
+            "tables": {name: {"rows": text.count("\n"),
+                              "sha256": hashlib.sha256(text.encode()).hexdigest()}
+                       for name, text in self.TABLES.items()},
+        }
+        data.update(changes)
+        return data
+
+    def answer(self, manifest=None, tables=None):
+        tables = tables or self.TABLES
+
+        def answer(path, params):
+            if path == "/bdc/books/WHF":
+                return FakeResponse(body={"data": manifest or self.manifest()})
+            name = path.rsplit("/", 1)[1]
+            return FakeResponse(text=tables[name], headers={"X-Book-Version": self.VERSION})
+
+        return answer
+
+    def test_request_posts_one_ticker(self):
+        code, out, err, session = self.run_cli(
+            "bdc", "request", "scm",
+            answer=lambda p, q: FakeResponse(202, {"data": {"ticker": "SCM", "status": "queued"}}))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.posted, [{"ticker": "scm"}])
+        self.assertEqual(session.calls[0][0], "/bdc/books")
+        self.assertIn("SCM: queued", out)
+
+    def test_book_prints_the_caveats_as_written(self):
+        code, out, err, _ = self.run_cli("bdc", "book", "whf", answer=self.answer())
+        self.assertEqual(code, 0, err)
+        self.assertIn("version " + self.VERSION, out)
+        self.assertIn("[per diem]", out, "a caveat is server text, printed literally")
+
+    def test_a_book_being_read_says_so(self):
+        answer = lambda p, q: FakeResponse(202, {"data": {"ticker": "SCM", "status": "reading"}})
+        code, out, err, _ = self.run_cli("bdc", "book", "SCM", answer=answer)
+        self.assertEqual(code, 0, err)
+        self.assertIn("SCM: reading, not read yet", out)
+
+    def test_pull_writes_every_table_and_the_manifest(self):
+        folder = os.path.join(self.scratch.name, "whf")
+        code, out, err, session = self.run_cli("bdc", "pull", "WHF", "--out", folder,
+                                               answer=self.answer())
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), folder)
+        self.assertIn("positions: 2 rows", err)
+        for name, text in self.TABLES.items():
+            with open(os.path.join(folder, name + ".jsonl"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), text)
+        with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], self.VERSION)
+        self.assertEqual(session.calls[1][1], {"version": self.VERSION},
+                         "tables are fetched at the manifest's version")
+
+    def test_pull_refuses_a_table_that_is_not_what_the_manifest_promised(self):
+        tampered = dict(self.TABLES, figures='{"key":"totals.nav","value":1}\n')
+        folder = os.path.join(self.scratch.name, "whf")
+        code, _, err, _ = self.run_cli("bdc", "pull", "WHF", "--out", folder,
+                                       answer=self.answer(tables=tampered))
+        self.assertEqual(code, 1)
+        self.assertIn("figures arrived different from what the manifest promises", err)
+
+    def test_pull_refuses_a_book_not_read_yet(self):
+        answer = lambda p, q: FakeResponse(202, {"data": {"ticker": "WHF", "status": "queued"}})
+        code, _, err, _ = self.run_cli("bdc", "pull", "WHF", answer=answer)
+        self.assertEqual(code, 1)
+        self.assertIn("WHF has no book yet: it is queued", err)
+
+    def test_pull_json_reports_what_it_wrote(self):
+        folder = os.path.join(self.scratch.name, "whf")
+        code, out, err, _ = self.run_cli("bdc", "pull", "WHF", "--out", folder, "--json",
+                                         answer=self.answer())
+        self.assertEqual(code, 0, err)
+        result = json.loads(out)
+        self.assertEqual(result["tables"], {"positions": 2, "figures": 1})
+        self.assertEqual(result["version"], self.VERSION)

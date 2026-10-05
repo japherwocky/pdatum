@@ -3,6 +3,7 @@ The HTTP client. Knows the API's envelope, its errors and its paging, and
 nothing about how results are printed.
 """
 
+import hashlib
 import time
 
 import requests
@@ -44,13 +45,18 @@ class Client:
             self.session.headers["Authorization"] = f"Bearer {key}"
         self._sleep = sleep
 
-    def _send(self, path, params=None):
+    def _send(self, path, params=None, body=None, stream=False):
         url = f"{self.url}/api/v1{path}"
         params = {k: _param(v) for k, v in (params or {}).items() if v is not None}
 
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = self.session.get(url, params=params, timeout=TIMEOUT)
+                if body is not None:
+                    response = self.session.post(url, params=params, json=body, timeout=TIMEOUT)
+                elif stream:
+                    response = self.session.get(url, params=params, timeout=TIMEOUT, stream=True)
+                else:
+                    response = self.session.get(url, params=params, timeout=TIMEOUT)
             except requests.exceptions.Timeout:
                 raise PdatumError(f"{self.url} took more than {TIMEOUT}s to answer. Try again.")
             except (requests.exceptions.MissingSchema, requests.exceptions.InvalidURL,
@@ -92,8 +98,29 @@ class Client:
         """One request; the parsed JSON body."""
         return self._send(path, params).json()
 
+    def post(self, path, body):
+        """One POST with a JSON body; the parsed JSON answer."""
+        return self._send(path, body=body).json()
+
     def text(self, path):
         return self._send(path).text
+
+    def download(self, path, dest, **params):
+        """
+        Stream a response body into the file `dest` without holding it in memory.
+
+        Returns (sha256 of what was written, lines written, response headers),
+        so a caller can check what arrived against what it was promised.
+        """
+        response = self._send(path, params, stream=True)
+        digest, lines = hashlib.sha256(), 0
+        with open(dest, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    f.write(chunk)
+                    digest.update(chunk)
+                    lines += chunk.count(b"\n")
+        return digest.hexdigest(), lines, response.headers
 
     def pages(self, path, on_page=None, **params):
         """
