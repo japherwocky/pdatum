@@ -263,6 +263,34 @@ class CommandTestCase(Isolated):
             answer=lambda p, q: FakeResponse(body={"data": {"count": 0}}))
         self.assertEqual(session.calls[0][1]["q"], "--json")
 
+    def test_json_after_every_flag_is_still_ours(self):
+        # pkanban 0.7.0 kept this list by hand, missed a new flag, and shipped
+        # `login --no-wait --json` failing "No such option: --json".
+        from typer.main import get_command
+
+        flags, pending = set(), [get_command(cli.app)]
+        while pending:
+            command = pending.pop()
+            for param in command.params:
+                if getattr(param, "is_flag", False):
+                    flags.update(param.opts)
+                    flags.update(param.secondary_opts)
+            pending.extend(getattr(command, "commands", {}).values())
+        flags -= {"--json", "--help"}
+        self.assertIn("--not-remote", flags)
+        for flag in sorted(flags):
+            with self.subTest(flag=flag):
+                argv = ["pdatum", "jobs", "list", flag, "--json"]
+                self.assertTrue(cli.extract_json_flag(argv))
+                self.assertEqual(argv, ["pdatum", "jobs", "list", flag])
+
+    def test_json_after_a_flag_reaches_the_command(self):
+        code, out, _, session = self.run_cli(
+            "jobs", "count", "--remote", "--json",
+            answer=lambda p, q: FakeResponse(body={"data": {"count": 3}}))
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"count": 3})
+
     def test_nothing_after_double_dash_is_an_option(self):
         argv = ["pdatum", "employers", "get", "--", "-k"]
         self.assertIsNone(cli.extract_api_key(argv))
