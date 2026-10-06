@@ -11,19 +11,19 @@ pdatum is the data jobwolverine.com and rxraven.com are built on.
 macOS, Linux, WSL:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.sh | sh
+curl -fsSL https://pdatum.pearachute.com/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.ps1 | iex
+irm https://pdatum.pearachute.com/install.ps1 | iex
 ```
 
 Windows CMD:
 
 ```bat
-curl -fsSL https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.cmd -o install.cmd && install.cmd && del install.cmd
+curl -fsSL https://pdatum.pearachute.com/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
 The installer uses uv or pipx if you have one, and installs uv (which brings

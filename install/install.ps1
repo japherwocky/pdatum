@@ -1,6 +1,6 @@
 # pdatum installer for Windows PowerShell.
 #
-#   irm https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.ps1 | iex
+#   irm https://pdatum.pearachute.com/install.ps1 | iex
 #
 # Installs the pdatum CLI as an isolated tool -- with uv if you have it, else
 # pipx, else it installs uv first (uv brings its own Python, so none is needed

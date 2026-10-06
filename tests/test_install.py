@@ -14,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install"
 RAW = "https://raw.githubusercontent.com/japherwocky/pdatum/main/install/"
+# What users copy: jobwolverine redirects each of these to RAW + the same name.
+SHORT = "https://pdatum.pearachute.com/"
 
 
 def read(name):
@@ -36,6 +38,8 @@ class Installers(unittest.TestCase):
         self.assertNotIn("\n", text.replace("\r\n", ""))
 
     def test_cmd_installer_hands_over_to_the_powershell_one(self):
+        # Straight to the raw file, not via the redirect: one less hop that
+        # could be down.
         self.assertIn(f"irm '{RAW}install.ps1' | iex", read("install.cmd"))
 
     def test_powershell_installer_never_exits(self):
@@ -65,10 +69,10 @@ class Installers(unittest.TestCase):
     def test_each_installer_documents_its_own_url(self):
         # The one-liner in each script's header is the one users copy.
         for script in ("install.sh", "install.ps1", "install.cmd"):
-            self.assertIn(RAW + script, read(script))
+            self.assertIn(SHORT + script, read(script))
 
     def test_readme_one_liners_name_installers_that_exist(self):
-        named = re.findall(re.escape(RAW) + r"([\w.]+)", (ROOT / "README.md").read_text(encoding="utf-8"))
+        named = re.findall(re.escape(SHORT) + r"(install[\w.]+)", (ROOT / "README.md").read_text(encoding="utf-8"))
         self.assertEqual(sorted(set(named)), ["install.cmd", "install.ps1", "install.sh"])
         for name in named:
             self.assertTrue((INSTALL / name).is_file(), name)

@@ -37,8 +37,9 @@ session.
 ## Install scripts
 
 `install/install.sh`, `install.ps1` and `install.cmd` are what the README's
-one-liners fetch, straight from GitHub's raw URLs on `main`: merging a change
-to them ships it. pkanban's (served by its own server, in `backend/install/`)
+one-liners fetch. `https://pdatum.pearachute.com/install.*` is a 302 in
+jobwolverine (`api/pdatum.py`) to their raw GitHub URLs on `main`, so merging a
+change to them ships it, and the scripts are never copied over there. pkanban's (served by its own server, in `backend/install/`)
 are the model. `.gitattributes` keeps the committed bytes runnable -- LF for
 sh, CRLF for cmd.exe -- because the raw URL serves the blob, not a checkout.
 `install.ps1` runs under `iex` in the caller's window, so it never calls

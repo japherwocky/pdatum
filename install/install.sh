@@ -1,7 +1,7 @@
 #!/bin/sh
 # pdatum installer for macOS, Linux and WSL.
 #
-#   curl -fsSL https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.sh | sh
+#   curl -fsSL https://pdatum.pearachute.com/install.sh | sh
 #
 # Installs the pdatum CLI as an isolated tool -- with uv if you have it, else
 # pipx, else it installs uv first (uv brings its own Python, so none is needed
