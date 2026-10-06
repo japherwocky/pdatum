@@ -1,0 +1,8 @@
+# The installers are served straight from this repository's raw files, so the
+# bytes committed are the bytes a user's shell runs.
+#
+# sh reads a \r as part of each command: LF, even in a Windows checkout.
+install/install.sh text eol=lf
+# cmd.exe misreads labels and long lines with bare \n: committed with CRLF and
+# never converted, since the raw URL serves the blob, not a checkout.
+install/install.cmd -text

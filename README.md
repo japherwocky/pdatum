@@ -6,9 +6,35 @@ stderr, and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
 
+## Install
+
+macOS, Linux, WSL:
+
 ```bash
-pip install pdatum
-export PDATUM_API_KEY=pdatum_...    # keys are issued by hand for now
+curl -fsSL https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.ps1 | iex
+```
+
+Windows CMD:
+
+```bat
+curl -fsSL https://raw.githubusercontent.com/japherwocky/pdatum/main/install/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+The installer uses uv or pipx if you have one, and installs uv (which brings
+its own Python) if you don't, then puts `pdatum` on your PATH for new
+terminals. `PDATUM_NO_MODIFY_PATH=1` leaves your PATH alone. Already have
+Python? `pip install pdatum` works too.
+
+## Use
+
+```bash
+pdatum key save pdatum_...    # keys are issued by hand for now
 
 pdatum jobs count --q "data engineer" --posted-since 30d
 pdatum jobs search --q nurse --remote

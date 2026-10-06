@@ -34,6 +34,16 @@ CI installs the package non-editable, on Python 3.9 and 3.12. 3.9 is the floor
 **No test may reach a server**: `tests/test_pdatum.py` replaces the HTTP
 session.
 
+## Install scripts
+
+`install/install.sh`, `install.ps1` and `install.cmd` are what the README's
+one-liners fetch, straight from GitHub's raw URLs on `main`: merging a change
+to them ships it. pkanban's (served by its own server, in `backend/install/`)
+are the model. `.gitattributes` keeps the committed bytes runnable -- LF for
+sh, CRLF for cmd.exe -- because the raw URL serves the blob, not a checkout.
+`install.ps1` runs under `iex` in the caller's window, so it never calls
+`exit`. `tests/test_install.py` holds them to all of this.
+
 ## Release
 
 Bump the version in `pyproject.toml` **and** `pdatum/__init__.py`, then push a
