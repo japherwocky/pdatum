@@ -26,6 +26,9 @@ pdatum employers get pfizer --json
 | `pdatum jobs get ID` | Returns one job, open or closed, with its full text. |
 | `pdatum jobs changes --since T` | Streams every job added, closed or reopened since `T`. |
 | `pdatum employers list / pull / get SLUG` | Employer records. Each fact names its source. |
+| `pdatum bdc book TICKER` | A business development company's book: its status, version, tables, and the caveats to read first. |
+| `pdatum bdc pull TICKER [--out DIR]` | Writes the whole book to a folder: `manifest.json` and one JSON-lines file per table, each checked against the manifest. |
+| `pdatum bdc request TICKER` | Asks for a lender that has not been read yet. Reading one takes a while. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |
 | `pdatum skill` | Prints short instructions for an AI agent to save. |
 | `pdatum guide` | Prints the full API reference, from the server. |
@@ -33,6 +36,22 @@ pdatum employers get pfizer --json
 The job filters are `--brand`, `--employer`, `-q`, `--location`,
 `--remote/--not-remote`, `--posted-since` and `--posted-before`. A time can be
 `2026-09-01`, an age like `7d`, `12h` or `30m`, or epoch seconds.
+
+## BDC books
+
+A book is what one business development company reports lending, read from
+its SEC filings: its positions quarter by quarter, the companies behind them
+under every name they are filed as, how every other lender we read marks the
+same loans, what changed between filings, the lender's own reported totals,
+and every figure a report would quote, already computed.
+
+```bash
+pdatum bdc book WHF                 # read the caveats before any number
+pdatum bdc pull WHF --out whf/      # manifest.json + positions.jsonl, figures.jsonl, ...
+```
+
+The same version is the same data, so a harness can cache on it. Quote the
+`figures` table rather than doing arithmetic on positions.
 
 ## Keeping a copy in sync
 
