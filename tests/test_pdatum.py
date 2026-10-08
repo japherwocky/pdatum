@@ -652,3 +652,80 @@ class BookTestCase(Isolated):
         result = json.loads(out)
         self.assertEqual(result["tables"], {"positions": 2, "figures": 1})
         self.assertEqual(result["version"], self.VERSION)
+
+
+class AwardsTestCase(Isolated):
+    """pdatum awards: federal awards by company name (wolverine card #761)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def data(self, **changes):
+        group = {"count": 12, "amount": 48210000, "capped": False,
+                 "latest_period_end": 1814313600, "agencies": ["Department of Defense"],
+                 "largest": []}
+        data = {
+            "names": ["Acme Corp"], "employer": None, "found": True,
+            "recipients": [{
+                "name": "ACME CORP [x]", "spellings": ["ACME CORP"], "one_word_name": False,
+                "contracts": dict(group, capped=True),
+                "idvs": dict(group, count=3, amount=None, latest_period_end=None),
+            }],
+            "loans_only": ["ACME CORPORATION"], "source": "usaspending.gov",
+            "observed_at": 1791475191,
+        }
+        data.update(changes)
+        return data
+
+    def answering(self, data, status=200):
+        return lambda path, params: FakeResponse(status, data if status != 200 else {"data": data})
+
+    def test_names_are_sent_as_repeated_parameters(self):
+        code, out, err, session = self.run_cli(
+            "awards", "Acme", "Acme Corp", "--employer", "acme", answer=self.answering(self.data()))
+        self.assertEqual(code, 0, err)
+        path, params = session.calls[0]
+        self.assertEqual(path, "/awards")
+        self.assertEqual(params, {"name": ["Acme", "Acme Corp"], "employer": "acme"})
+
+    def test_the_table_marks_capped_counts_and_never_shows_a_vehicle_as_zero(self):
+        code, out, err, _ = self.run_cli("awards", "Acme Corp", answer=self.answering(self.data()))
+        self.assertEqual(code, 0, err)
+        self.assertIn("ACME CORP [x]", out)          # escaped, not read as markup
+        self.assertIn("12+", out)                    # capped
+        self.assertIn("$48,210,000", out)
+        self.assertNotIn("$0", out)                  # the IDV has no amount
+        self.assertIn("2027-06-30", out)
+        self.assertIn("loans only, not counted: ACME CORPORATION", out)
+
+    def test_json_is_the_data_as_served(self):
+        data = self.data()
+        code, out, err, _ = self.run_cli("awards", "Acme Corp", "--json", answer=self.answering(data))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out), data)
+
+    def test_a_one_word_name_is_flagged(self):
+        data = self.data()
+        data["recipients"][0]["one_word_name"] = True
+        _, out, _, _ = self.run_cli("awards", "Alloy", answer=self.answering(data))
+        self.assertIn("one-word name", out)
+
+    def test_nothing_found_says_so(self):
+        data = self.data(found=False, recipients=[], loans_only=[], names=["Pepper Palace"])
+        code, out, err, _ = self.run_cli("awards", "Pepper Palace", answer=self.answering(data))
+        self.assertEqual(code, 0, err)
+        self.assertIn("no federal awards to a recipient named Pepper Palace", out)
+
+    def test_a_name_or_an_employer_is_required(self):
+        code, out, err, session = self.run_cli("awards")
+        self.assertEqual(code, 2)
+        self.assertEqual(session.calls, [])
+
+    def test_a_source_that_did_not_answer_is_an_error_not_an_empty_answer(self):
+        error = {"error": {"code": "source_unavailable", "message": "USAspending did not answer."}}
+        code, out, err, _ = self.run_cli("awards", "Acme Corp", "--json",
+                                         answer=self.answering(error, status=503))
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err)["code"], "source_unavailable")

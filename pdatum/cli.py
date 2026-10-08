@@ -15,7 +15,7 @@ into a file or another tool.
 import json
 import os
 import sys
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.table import Table
@@ -341,6 +341,57 @@ def employers_get(slug: str = typer.Argument(..., help="The employer's slug.")):
     emit(e, render)
 
 
+# -- federal awards ------------------------------------------------------------------
+
+AWARD_TYPES = (("contracts", "contracts"), ("idvs", "IDVs"), ("grants", "grants"))
+
+
+def day(epoch):
+    """An epoch as a UTC date; '-' for none."""
+    return timespec.show(epoch)[:10] if epoch is not None else "-"
+
+
+def money(amount):
+    # An IDV has no amount of its own: null, shown as a dash, never $0.
+    return "-" if amount is None else f"${amount:,.0f}"
+
+
+@app.command("awards")
+def awards(
+    names: Optional[List[str]] = typer.Argument(
+        None, help="The company's name. More than one for other names it goes by, up to 5."),
+    employer: Optional[str] = EMPLOYER,
+):
+    """Federal contracts, IDVs and grants to a company, from USAspending.gov."""
+    if not names and not employer:
+        raise typer.BadParameter("give a company name, or --employer SLUG", param_hint="NAME")
+    data = client().get("/awards", name=list(names) if names else None, employer=employer)["data"]
+
+    def render():
+        if not data["found"]:
+            console.print(f"no federal awards to a recipient named {esc(' / '.join(data['names']))}")
+        for r in data["recipients"]:
+            flag = "  [yellow]one-word name: confirm it is this company[/yellow]" if r["one_word_name"] else ""
+            console.print(f"[bold]{esc(r['name'])}[/bold]{flag}")
+            table = Table(show_edge=False, pad_edge=False)
+            for column in ("type", "awards", "obligated", "latest end", "agencies"):
+                table.add_column(column, overflow="fold")
+            for key, label in AWARD_TYPES:
+                g = r.get(key)
+                if g:
+                    table.add_row(label, f"{g['count']:,}" + ("+" if g["capped"] else ""),
+                                  money(g["amount"]), day(g["latest_period_end"]),
+                                  esc(", ".join(g["agencies"])))
+            console.print(table)
+            if any(r.get(k, {}).get("capped") for k, _ in AWARD_TYPES):
+                console.print("[dim]+ more awards than were read: counts and amounts are the largest only[/dim]")
+        if data["loans_only"]:
+            console.print(f"[dim]loans only, not counted: {esc(', '.join(data['loans_only']))}[/dim]")
+        console.print(f"[dim]{esc(data['source'])}, fetched {timespec.show(data['observed_at'])} UTC[/dim]")
+
+    emit(data, render)
+
+
 # -- BDC books ----------------------------------------------------------------------
 
 TICKER = typer.Argument(..., help="The lender's ticker, e.g. WHF, or its CIK.")
@@ -516,6 +567,12 @@ Every fact names its source. hiring is true, false, or null (unknown).
 Stay in sync: pdatum jobs changes --since 2026-09-01 > delta.jsonl
   Upsert each line by id; "open": false means the job closed.
   The last stderr line gives the --since to use next time.
+
+Federal awards -- contracts, IDVs and grants, from USAspending, for any company by name:
+  pdatum awards "Acme Corp" --json       more names for one company: pdatum awards "Acme" "Acme Corp"
+  pdatum awards --employer acme          an employer's name and aliases
+  found false means USAspending has none; a one_word_name match needs confirming.
+  Loans are left out (loans_only lists recipients that hold only loans).
 
 BDC books -- what a lender reports lending, from its SEC filings, by ticker:
   pdatum bdc book WHF            status, version, tables, and caveats: read those first
