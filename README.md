@@ -1,8 +1,8 @@
 # pdatum
 
-Job postings, and the employers behind them, from the command line. Built for
-scripts and AI agents: everything prints JSON on request, errors go to
-stderr, and large pulls stream JSON lines.
+Job postings, the employers behind them, and federal awards to any company,
+from the command line. Built for scripts and AI agents: everything prints JSON
+on request, errors go to stderr, and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
 
@@ -40,6 +40,7 @@ pdatum jobs count --q "data engineer" --posted-since 30d
 pdatum jobs search --q nurse --remote
 pdatum jobs pull --brand rxraven > jobs.jsonl
 pdatum employers get pfizer --json
+pdatum awards "Acme Corp"
 ```
 
 ## Commands
@@ -52,6 +53,7 @@ pdatum employers get pfizer --json
 | `pdatum jobs get ID` | Returns one job, open or closed, with its full text. |
 | `pdatum jobs changes --since T` | Streams every job added, closed or reopened since `T`. |
 | `pdatum employers list / pull / get SLUG` | Employer records. Each fact names its source. |
+| `pdatum awards NAME... [--employer SLUG]` | Federal contracts, IDVs and grants to a company, from USAspending.gov: counts, amounts, agencies, and when the work ends. Any company, by its whole name. Loans are left out. |
 | `pdatum bdc book TICKER` | A business development company's book: its status, version, tables, and the caveats to read first. |
 | `pdatum bdc pull TICKER [--out DIR]` | Writes the whole book to a folder: `manifest.json` and one JSON-lines file per table, each checked against the manifest. |
 | `pdatum bdc request TICKER` | Asks for a lender that has not been read yet. Reading one takes a while. |

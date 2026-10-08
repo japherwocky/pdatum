@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdatum"
-version = "0.1.1"
+version = "0.2.0"
 description = "Job postings and the employers behind them, from the command line -- for scripts and AI agents."
 readme = "README.md"
 license = "MIT"
