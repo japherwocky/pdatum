@@ -729,3 +729,95 @@ class AwardsTestCase(Isolated):
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
         self.assertEqual(json.loads(err)["code"], "source_unavailable")
+
+
+class CompaniesTestCase(Isolated):
+    """pdatum companies: the registry, by slug and by name (wolverine card #880)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def answering(self, data, status=200):
+        return lambda path, params: FakeResponse(status, {"data": data})
+
+    def test_an_unquoted_name_is_one_name(self):
+        data = {"name": "Acme Buyer, Inc.", "status": "matched", "company": "acme-buyer-inc",
+                "request": None}
+        code, out, err, session = self.run_cli("companies", "resolve", "Acme", "Buyer,", "Inc.",
+                                               answer=self.answering(data))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/companies/resolve", {"name": "Acme Buyer, Inc."}))
+        self.assertIn("Acme Buyer, Inc.: acme-buyer-inc", out)
+
+    def test_request_posts_the_name_and_says_how_to_follow_it(self):
+        data = {"name": "Zeta [Holdings]", "status": "unknown", "similar": [],
+                "request": {"name": "Zeta [Holdings]", "status": "queued", "hits": None,
+                            "lenders": None, "message": None, "requested_at": 1791475191,
+                            "started_at": None, "finished_at": None}}
+        code, out, err, session = self.run_cli("companies", "request", "Zeta [Holdings]",
+                                               answer=self.answering(data, 202))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.posted, [{"name": "Zeta [Holdings]"}])
+        self.assertIn("no company we hold is named Zeta [Holdings]", out)  # escaped, not markup
+        self.assertIn("search: queued", out)
+        self.assertIn('pdatum companies resolve "Zeta [Holdings]"', out)
+
+    def test_unknown_without_a_search_says_how_to_start_one(self):
+        data = {"name": "Acme Buyer", "status": "unknown", "request": None,
+                "similar": [{"company": "acme-buyer-inc", "name": "Acme Buyer, Inc.",
+                             "how": "spelling"}]}
+        _, out, _, _ = self.run_cli("companies", "resolve", "Acme Buyer",
+                                    answer=self.answering(data))
+        self.assertIn("none of them a match", out)
+        self.assertIn("acme-buyer-inc", out)
+        self.assertIn('pdatum companies request "Acme Buyer"', out)
+
+    def test_a_search_lists_its_lenders(self):
+        data = {"name": "Zeta", "status": "unknown", "similar": [],
+                "request": {"name": "Zeta", "status": "reading", "hits": 4, "message": None,
+                            "lenders": [{"cik": "0000000002", "name": "Other Capital Corp",
+                                         "status": "reading"}],
+                            "requested_at": 1, "started_at": 2, "finished_at": None}}
+        _, out, _, _ = self.run_cli("companies", "resolve", "Zeta", answer=self.answering(data))
+        self.assertIn("Other Capital Corp (0000000002): reading", out)
+
+    def test_a_merged_slug_says_where_it_went(self):
+        data = {"slug": "acme-midco-llc", "name": "Acme Midco, LLC",
+                "merged_into": "acme-buyer-inc", "merged_at": 1791475191}
+        code, out, err, session = self.run_cli("companies", "get", "acme-midco-llc",
+                                               answer=self.answering(data))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0][0], "/companies/acme-midco-llc")
+        self.assertIn("was merged into acme-buyer-inc", out)
+        self.assertIn("pdatum companies get acme-buyer-inc", out)
+
+    def test_get_shows_names_and_holders(self):
+        data = {"slug": "acme-buyer-inc", "name": "Acme Fastening", "domain": None,
+                "employer": None, "lenders": ["whf"], "created_at": 1, "merged_into": None,
+                "names": [{"name": "Acme Buyer, Inc.", "kind": "legal", "source": "whf-10q",
+                           "recorded_at": 1789862400}],
+                "retired_names": [{"name": "ACME | First Lien", "kind": "legal",
+                                   "source": "whf-10q", "recorded_at": 1, "retired_at": 1790000000}],
+                "held_by": [{"lender": "whf", "ticker": "WHF", "book": "direct",
+                             "first_as_of": 1664496000, "last_as_of": 1782777600}]}
+        code, out, err, _ = self.run_cli("companies", "get", "acme-buyer-inc",
+                                         answer=self.answering(data))
+        self.assertEqual(code, 0, err)
+        for text in ("Acme Fastening", "Acme Buyer, Inc.", "ACME | First Lien", "retired",
+                     "WHF", "2022-09-30", "2026-06-30"):
+            self.assertIn(text, out)
+
+    def test_a_slug_is_sent_as_one_path_segment(self):
+        _, _, _, session = self.run_cli("companies", "get", "../me",
+                                        answer=self.answering({"merged_into": None}, 404))
+        self.assertEqual(session.calls[0][0], "/companies/..%2Fme")
+
+    def test_pull_streams_every_page(self):
+        records = [{"slug": "c%d" % i} for i in range(3)]
+        code, out, err, session = self.run_cli("companies", "pull", "--lender", "WHF",
+                                               answer=pages_of(records, 2))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([json.loads(x)["slug"] for x in out.splitlines()], ["c0", "c1", "c2"])
+        self.assertEqual(session.calls[0][1]["lender"], "WHF")
+        self.assertIn("pulled 3 of 3 companies", err)

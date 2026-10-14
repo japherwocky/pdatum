@@ -7,9 +7,9 @@ is off, `--json` and `--api-key` are only taken from where they can be ours
 (never from another option's value, never after `--`), and long text never
 has to pass through a shell.
 
-Streams -- `jobs pull`, `jobs changes`, `employers pull` -- write JSON lines to
-stdout and progress to stderr, in either mode, so they can be piped straight
-into a file or another tool.
+Streams -- `jobs pull`, `jobs changes`, `employers pull`, `companies pull` --
+write JSON lines to stdout and progress to stderr, in either mode, so they can
+be piped straight into a file or another tool.
 """
 
 import json
@@ -47,9 +47,14 @@ bdc_app = typer.Typer(
     help="BDC books: what a lender reports lending, read from its SEC filings, by ticker.",
     no_args_is_help=True,
 )
+companies_app = typer.Typer(
+    help="The registry: every private company a BDC we read holds, under every name it is filed as.",
+    no_args_is_help=True,
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(employers_app, name="employers")
 app.add_typer(bdc_app, name="bdc")
+app.add_typer(companies_app, name="companies")
 app.add_typer(key_app, name="key")
 
 
@@ -485,6 +490,146 @@ def bdc_pull(
     emit(result, lambda: console.print(folder, markup=False, soft_wrap=True))
 
 
+# -- companies: the registry ----------------------------------------------------------
+
+COMPANY_Q = typer.Option(None, "--q", "-q", help="Text in any of its current names.")
+LENDER = typer.Option(None, "--lender", help="Only companies this lender holds: its slug or ticker.")
+COMPANY_DOMAIN = typer.Option(None, "--domain", help="An exact domain.")
+NAME = typer.Argument(..., help='The company\'s name, as you have it. Quote it: "Acme Buyer, Inc."')
+
+
+def company_path(slug):
+    from urllib.parse import quote
+
+    return "/companies/" + quote(slug.strip(), safe="")
+
+
+def name_of(words):
+    """A name typed as several words, unquoted, is still one name."""
+    return " ".join(words)
+
+
+@companies_app.command("list")
+def companies_list(
+    q: Optional[str] = COMPANY_Q, lender: Optional[str] = LENDER,
+    domain: Optional[str] = COMPANY_DOMAIN,
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=500),
+):
+    """Companies in the registry: one page. For all of them, use pull."""
+    body = client().get("/companies", q=q, lender=lender, domain=domain, limit=limit)
+
+    def render():
+        table = Table(show_edge=False, pad_edge=False)
+        for column in ("slug", "name", "names", "lenders"):
+            table.add_column(column, overflow="fold")
+        for c in body["data"]:
+            table.add_row(esc(c["slug"]), esc(c["name"]), str(len(c["names"])),
+                          esc(", ".join(c["lenders"])))
+        console.print(table)
+        console.print(f"[dim]{fraction(len(body['data']), body['total'])}[/dim]")
+
+    emit(body, render)
+
+
+@companies_app.command("pull")
+def companies_pull(
+    q: Optional[str] = COMPANY_Q, lender: Optional[str] = LENDER,
+    domain: Optional[str] = COMPANY_DOMAIN,
+):
+    """Every company that matches, as JSON lines on stdout."""
+    for company in client().pages(
+        "/companies", on_page=pull_progress("companies"),
+        q=q, lender=lender, domain=domain, limit=500,
+    ):
+        line(company)
+
+
+@companies_app.command("get")
+def companies_get(slug: str = typer.Argument(..., help="The company's slug.")):
+    """
+    One company: every name it is filed under, and each lender that holds it.
+    A slug merged into another company says which.
+    """
+    c = client().get(company_path(slug))["data"]
+
+    def render():
+        if c.get("merged_into"):
+            console.print(f"{esc(c['slug'])} was merged into {esc(c['merged_into'])} on "
+                          f"{day(c['merged_at'])}. Follow it with: "
+                          f"pdatum companies get {esc(c['merged_into'])}", soft_wrap=True)
+            return
+        console.print(f"[bold]{esc(c['name'])}[/bold] ({esc(c['slug'])})  {esc(c['domain'] or '')}")
+        if c.get("employer"):
+            console.print(f"employer: {esc(c['employer'])}")
+        table = Table(show_edge=False, pad_edge=False, title="names")
+        for column in ("name", "kind", "source", "recorded"):
+            table.add_column(column, overflow="fold")
+        for n in c["names"]:
+            table.add_row(esc(n["name"]), esc(n["kind"]), esc(n["source"]), day(n["recorded_at"]))
+        for n in c.get("retired_names") or []:
+            table.add_row(f"[dim]{esc(n['name'])}[/dim]", "retired", esc(n["source"]),
+                          day(n["retired_at"]))
+        console.print(table)
+        held = Table(show_edge=False, pad_edge=False, title="held by")
+        for column in ("lender", "ticker", "book", "first as of", "last as of"):
+            held.add_column(column)
+        for h in c.get("held_by") or []:
+            held.add_row(esc(h["lender"]), esc(h["ticker"] or ""), esc(h["book"]),
+                         day(h["first_as_of"]), day(h["last_as_of"]))
+        console.print(held)
+
+    emit(c, render)
+
+
+def show_answer(data):
+    """What the registry said a name is, and how a search for it stands."""
+    name = data["name"]
+    if data["status"] == "matched":
+        console.print(f"{esc(name)}: [bold]{esc(data['company'])}[/bold]")
+    elif data["status"] == "ambiguous":
+        console.print(f"{esc(name)} is more than one company; none is chosen:")
+        for c in data["candidates"]:
+            console.print(f"  {esc(c['company'])}  {esc(c['name'])}")
+    else:
+        console.print(f"no company we hold is named {esc(name)}")
+        if data.get("similar"):
+            console.print("[dim]similar, and none of them a match:[/dim]")
+            for s in data["similar"]:
+                console.print(f"  {esc(s['company'])}  {esc(s['name'])}  [dim]({esc(s['how'])})[/dim]")
+    req = data.get("request")
+    if req:
+        console.print(f"search: {esc(req['status'])}, asked {timespec.show(req['requested_at'])}")
+        for lender in req.get("lenders") or []:
+            console.print(f"  {esc(lender['name'] or lender['cik'])} ({esc(lender['cik'])}): "
+                          f"{esc(lender['status'] or '')}")
+        if req.get("message"):
+            console.print(f"[dim]{esc(req['message'])}[/dim]", soft_wrap=True)
+        if req["status"] in ("queued", "searching", "reading"):
+            console.print(f"[dim]Follow it with: pdatum companies resolve {esc(json.dumps(name))}[/dim]",
+                          soft_wrap=True)
+    elif data["status"] == "unknown":
+        console.print(f"[dim]To search EDGAR for it: pdatum companies request {esc(json.dumps(name))}[/dim]",
+                      soft_wrap=True)
+
+
+@companies_app.command("resolve")
+def companies_resolve(name: List[str] = NAME):
+    """What a name is, from what the registry holds: matched, ambiguous or unknown. Starts nothing."""
+    data = client().get("/companies/resolve", name=name_of(name))["data"]
+    emit(data, lambda: show_answer(data))
+
+
+@companies_app.command("request")
+def companies_request(name: List[str] = NAME):
+    """
+    The same answer, for any name. One we do not hold is searched for on EDGAR,
+    and the BDCs that name it are read; that takes a while. Follow it with: pdatum
+    companies resolve.
+    """
+    data = client().post("/companies/resolve", {"name": name_of(name)})["data"]
+    emit(data, lambda: show_answer(data))
+
+
 # -- the key, the server, and you ------------------------------------------------
 
 
@@ -580,6 +725,15 @@ BDC books -- what a lender reports lending, from its SEC filings, by ticker:
   pdatum bdc request SCM         a lender not read yet; reading one takes a while
 Quote the figures table (key, value, unit, definition) rather than doing
 arithmetic on positions. The same version is the same data; cache on it.
+
+Companies -- the private borrowers those lenders hold, under every name they are filed as:
+  pdatum companies resolve "Acme Buyer, Inc." --json   matched, ambiguous or unknown; starts nothing
+  pdatum companies request "Acme Buyer, Inc."          any name: an unknown one is searched for on
+                                                       EDGAR and its lenders read (takes a while)
+  pdatum companies get acme-buyer-inc --json           names, and each lender that holds it
+  pdatum companies pull --lender WHF > companies.jsonl
+Matching is exact but for case and spacing; "similar" is never a match.
+A slug is the company in every book table. One merged away answers merged_into.
 
 Times take 2026-09-01, 7d / 12h / 30m, or epoch seconds.
 Every command takes --json; errors go to stderr, exit code non-zero.
