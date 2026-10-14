@@ -1,7 +1,7 @@
 # pdatum
 
-Job postings, the employers behind them, and federal awards to any company,
-from the command line. Built for scripts and AI agents: everything prints JSON
+Job postings, the employers behind them, federal awards to any company, and
+BDC lenders' books and the private companies they hold, from the command line. Built for scripts and AI agents: everything prints JSON
 on request, errors go to stderr, and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
@@ -57,6 +57,9 @@ pdatum awards "Acme Corp"
 | `pdatum bdc book TICKER` | A business development company's book: its status, version, tables, and the caveats to read first. |
 | `pdatum bdc pull TICKER [--out DIR]` | Writes the whole book to a folder: `manifest.json` and one JSON-lines file per table, each checked against the manifest. |
 | `pdatum bdc request TICKER` | Asks for a lender that has not been read yet. Reading one takes a while. |
+| `pdatum companies resolve NAME` | Looks up which company a name belongs to: `matched`, `ambiguous` or `unknown`. Starts nothing. |
+| `pdatum companies request NAME` | Gives the same answer for any name. For a name we don't hold, it searches EDGAR for the BDCs that name it and reads them. That takes a while. |
+| `pdatum companies list / pull / get SLUG` | The registry: each company's names, and the lenders that hold it. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |
 | `pdatum skill` | Prints short instructions for an AI agent to save. |
 | `pdatum guide` | Prints the full API reference, from the server. |
@@ -80,6 +83,24 @@ pdatum bdc pull WHF --out whf/      # manifest.json + positions.jsonl, figures.j
 
 The same version is the same data, so a harness can cache on it. Quote the
 `figures` table rather than doing arithmetic on positions.
+
+## Companies
+
+A private borrower has no ticker. It's a line in its lenders' schedules,
+spelled a little differently by each one. The registry joins those lines into
+one company with one slug, and that slug is the `company` field in every book
+table.
+
+```bash
+pdatum companies resolve "Acme Buyer, Inc."    # which company a name belongs to
+pdatum companies request "Zeta Holdings, LLC"  # not held yet: search EDGAR and read its lenders
+pdatum companies get acme-buyer-inc            # every name, and each lender that holds it
+```
+
+Matching ignores case and spacing, and nothing else. An unknown name comes
+back with `similar` names, and none of them is a match until you decide it is.
+Slugs stay valid: when two companies merge, the old slug answers with
+`merged_into`, pointing at the company it became.
 
 ## Keeping a copy in sync
 
