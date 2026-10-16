@@ -915,5 +915,6 @@ class WarnTestCase(Isolated):
     def test_a_bad_time_is_a_usage_error(self):
         code, _, err, session = self.run_cli("warn", "list", "--notice-since", "someday")
         self.assertEqual(code, 2)
-        self.assertIn("--notice-since", err)
+        # Not the option's name: rich colours it on CI, splitting it in two.
+        self.assertIn("'someday' is not a time", err)
         self.assertEqual(session.calls, [])
