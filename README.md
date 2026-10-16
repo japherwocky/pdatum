@@ -1,8 +1,9 @@
 # pdatum
 
-Job postings, the employers behind them, federal awards to any company, and
-BDC lenders' books and the private companies they hold, from the command line. Built for scripts and AI agents: everything prints JSON
-on request, errors go to stderr, and large pulls stream JSON lines.
+Job postings, the employers behind them, federal awards to any company, BDC
+lenders' books and the private companies they hold, and state WARN layoff
+notices, from the command line. Built for scripts and AI agents: everything
+prints JSON on request, errors go to stderr, and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
 
@@ -60,6 +61,9 @@ pdatum awards "Acme Corp"
 | `pdatum companies resolve NAME` | Looks up which company a name belongs to: `matched`, `ambiguous` or `unknown`. Starts nothing. |
 | `pdatum companies request NAME` | Gives the same answer for any name. For a name we don't hold, it searches EDGAR for the BDCs that name it and reads them. That takes a while. |
 | `pdatum companies list / pull / get SLUG` | The registry: each company's names, and the lenders that hold it. |
+| `pdatum warn states` | Lists every state, whether we read it or not: who reads it, when it was last read, and why we don't read the rest. |
+| `pdatum warn list / count / pull [filters]` | State WARN notices of layoffs and closures, newest notice first. |
+| `pdatum warn changes --since T` | Streams every notice read for the first time, or newly linked to one of our records, since `T`. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |
 | `pdatum skill` | Prints short instructions for an AI agent to save. |
 | `pdatum guide` | Prints the full API reference, from the server. |
@@ -101,6 +105,27 @@ Matching ignores case and spacing, and nothing else. An unknown name comes
 back with `similar` names, and none of them is a match until you decide it is.
 Slugs stay valid: when two companies merge, the old slug answers with
 `merged_into`, pointing at the company it became.
+
+## WARN notices
+
+An employer with 100 or more staff has to give 60 days' notice of a mass
+layoff or a closure, and each state publishes the notices in its own format.
+pdatum serves every notice from every state we read, in one shape.
+
+```bash
+pdatum warn states                            # read this first
+pdatum warn list --state tx --notice-since 90d
+pdatum warn pull --employer pfizer > warn.jsonl
+```
+
+Not every state is read, and a state we don't read isn't a state with no
+layoffs. `pdatum warn states` says which states are read, when each was last
+read, and why we don't read the rest. A notice links to a company and to an
+employer record when the employer's name is theirs. That's a match on the
+name, not proof that it's the same business.
+
+The filters are `--state` (repeat it for more than one), `--company`,
+`--employer`, `-q`, `--notice-since` and `--notice-before`.
 
 ## Keeping a copy in sync
 
