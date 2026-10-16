@@ -891,11 +891,11 @@ class WarnTestCase(Isolated):
 
     def test_states_shows_what_is_read_and_why_the_rest_is_not(self):
         data = [
-            {"state": "tx", "read": True, "reader": "pdatum", "unread_because": None,
+            {"state": "tx", "read": True, "unread_because": None,
              "source": {"name": "Texas Workforce Commission", "url": "https://x.test"},
              "last_read_at": 1790035200, "rows_read": 2510, "notices": 2510,
              "first_notice_at": 1577923200, "last_notice_at": 1789948800},
-            {"state": "va", "read": False, "reader": None,
+            {"state": "va", "read": False,
              "unread_because": "drives a stealth [headless] browser", "source": None,
              "last_read_at": None, "rows_read": None, "notices": 0,
              "first_notice_at": None, "last_notice_at": None},
@@ -904,7 +904,7 @@ class WarnTestCase(Isolated):
             "warn", "states", answer=lambda p, q: FakeResponse(body={"data": data}))
         self.assertEqual(code, 0, err)
         # The table folds a long cell, so the reason is looked for in pieces.
-        for text in ("TX", "pdatum", "2026-09-22", "2,510", "VA", "stealth", "[headless]",
+        for text in ("TX", "2026-09-22", "2,510", "VA", "stealth", "[headless]",
                      "1 of 2 read"):
             self.assertIn(text, out)
 

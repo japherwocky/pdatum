@@ -61,7 +61,7 @@ pdatum awards "Acme Corp"
 | `pdatum companies resolve NAME` | Looks up which company a name belongs to: `matched`, `ambiguous` or `unknown`. Starts nothing. |
 | `pdatum companies request NAME` | Gives the same answer for any name. For a name we don't hold, it searches EDGAR for the BDCs that name it and reads them. That takes a while. |
 | `pdatum companies list / pull / get SLUG` | The registry: each company's names, and the lenders that hold it. |
-| `pdatum warn states` | Lists every state, whether we read it or not: who reads it, when it was last read, and why we don't read the rest. |
+| `pdatum warn states` | Lists every state, whether we read it or not: when it was last read, how many notices we hold, and why we don't read the rest. |
 | `pdatum warn list / count / pull [filters]` | State WARN notices of layoffs and closures, newest notice first. |
 | `pdatum warn changes --since T` | Streams every notice read for the first time, or newly linked to one of our records, since `T`. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |

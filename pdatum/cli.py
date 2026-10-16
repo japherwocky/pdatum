@@ -755,15 +755,14 @@ def warn_states():
 
     def render():
         table = Table(show_edge=False, pad_edge=False)
-        for column in ("state", "read by", "last read", "notices", "newest", "not read because"):
+        for column in ("state", "last read", "notices", "newest", "not read because"):
             table.add_column(column, overflow="fold")
         for s in data:
             if s["read"]:
-                table.add_row(esc(s["state"].upper()), esc(s["reader"] or ""),
-                              day(s["last_read_at"]), f"{s['notices']:,}",
-                              day(s["last_notice_at"]), "")
+                table.add_row(esc(s["state"].upper()), day(s["last_read_at"]),
+                              f"{s['notices']:,}", day(s["last_notice_at"]), "")
             else:
-                table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "", "",
+                table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "",
                               f"{s['notices']:,}" if s["notices"] else "", "",
                               f"[dim]{esc(s['unread_because'] or '')}[/dim]")
         console.print(table)
