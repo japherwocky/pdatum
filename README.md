@@ -40,7 +40,7 @@ pdatum key save pdatum_...    # keys are issued by hand for now
 pdatum jobs count --q "data engineer" --posted-since 30d
 pdatum jobs search --q nurse --remote
 pdatum jobs pull --brand rxraven > jobs.jsonl
-pdatum employers get pfizer --json
+pdatum employers get salesforce --json
 pdatum awards "Acme Corp"
 ```
 
@@ -96,9 +96,9 @@ one company with one slug, and that slug is the `company` field in every book
 table.
 
 ```bash
-pdatum companies resolve "Acme Buyer, Inc."    # which company a name belongs to
-pdatum companies request "Zeta Holdings, LLC"  # not held yet: search EDGAR and read its lenders
-pdatum companies get acme-buyer-inc            # every name, and each lender that holds it
+pdatum companies resolve "Clean Solutions Group"  # which company a name belongs to
+pdatum companies request "Zeta Holdings, LLC"    # not held yet: search EDGAR and read its lenders
+pdatum companies get clean-solutions-buyer-inc   # every name, and each lender that holds it
 ```
 
 Matching ignores case and spacing, and nothing else. An unknown name comes
@@ -115,7 +115,7 @@ pdatum serves every notice from every state we read, in one shape.
 ```bash
 pdatum warn states                            # read this first
 pdatum warn list --state tx --notice-since 90d
-pdatum warn pull --employer pfizer > warn.jsonl
+pdatum warn pull --state ca --state ny > warn.jsonl
 ```
 
 Not every state is read, and a state we don't read isn't a state with no

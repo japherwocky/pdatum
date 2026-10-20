@@ -847,8 +847,8 @@ Pull everything that matches, as JSON lines (progress goes to stderr):
   pdatum jobs pull --q nurse --brand rxraven > jobs.jsonl
 
 One job in full:          pdatum jobs get 48213 --json
-Employers and their facts: pdatum employers list --q pfizer --json
-                           pdatum employers get pfizer --json
+Employers and their facts: pdatum employers list --q salesforce --json
+                           pdatum employers get salesforce --json
 Every fact names its source. hiring is true, false, or null (unknown).
 
 Stay in sync: pdatum jobs changes --since 2026-09-01 > delta.jsonl
@@ -857,7 +857,7 @@ Stay in sync: pdatum jobs changes --since 2026-09-01 > delta.jsonl
 
 Federal awards -- contracts, IDVs and grants, from USAspending, for any company by name:
   pdatum awards "Acme Corp" --json       more names for one company: pdatum awards "Acme" "Acme Corp"
-  pdatum awards --employer acme          an employer's name and aliases
+  pdatum awards --employer salesforce    an employer's name and aliases
   found false means USAspending has none; a one_word_name match needs confirming.
   Loans are left out (loans_only lists recipients that hold only loans).
 
@@ -869,10 +869,12 @@ Quote the figures table (key, value, unit, definition) rather than doing
 arithmetic on positions. The same version is the same data; cache on it.
 
 Companies -- the private borrowers those lenders hold, under every name they are filed as:
-  pdatum companies resolve "Acme Buyer, Inc." --json   matched, ambiguous or unknown; starts nothing
-  pdatum companies request "Acme Buyer, Inc."          any name: an unknown one is searched for on
-                                                       EDGAR and its lenders read (takes a while)
-  pdatum companies get acme-buyer-inc --json           names, and each lender that holds it
+  pdatum companies resolve "Clean Solutions Group" --json
+      matched, ambiguous or unknown; starts nothing
+  pdatum companies request "Acme Buyer, Inc."
+      any name: an unknown one is searched for on EDGAR and its lenders read (takes a while)
+  pdatum companies get clean-solutions-buyer-inc --json
+      names, and each lender that holds it
   pdatum companies pull --lender WHF > companies.jsonl
 Matching is exact but for case and spacing; "similar" is never a match.
 A slug is the company in every book table. One merged away answers merged_into.
@@ -880,7 +882,7 @@ A slug is the company in every book table. One merged away answers merged_into.
 WARN notices -- layoffs and closures states publish, every one from the states we read:
   pdatum warn states --json                   which states are read, when, and why not the rest
   pdatum warn list --state tx --notice-since 90d
-  pdatum warn pull --employer pfizer > warn.jsonl   or --company SLUG, --q TEXT
+  pdatum warn pull --state ca --state ny > warn.jsonl   or --employer SLUG, --company SLUG, --q TEXT
   pdatum warn changes --since 2026-09-01      new notices and new links; upsert by id
 A state we don't read is not a state with no layoffs: check warn states first.
 company and employer_slug link a notice to our records when the names are equal,

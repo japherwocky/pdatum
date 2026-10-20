@@ -10,7 +10,14 @@ import requests
 
 from pdatum import __version__
 
-TIMEOUT = 60
+# Seconds to connect, then seconds to wait for an answer. The server's nginx
+# gives a request 180s (proxy_read_timeout, in jobwolverine's sys/nginx), and
+# a company's first awards lookup goes to USAspending and has taken over a
+# minute. At 60s the client reported an answer still on its way as a failure,
+# and the retry it suggested came back at once, from the cache that answer
+# filled.
+CONNECT_TIMEOUT = 15
+TIMEOUT = 190
 
 # How many times one request waits out a 429 before giving up. A long pull
 # hits the per-key limit on purpose; waiting is the right answer, forever is
@@ -50,22 +57,25 @@ class Client:
         params = {k: _param(v) for k, v in (params or {}).items() if v is not None}
 
         for attempt in range(MAX_RETRIES + 1):
+            timeout = (CONNECT_TIMEOUT, TIMEOUT)
             try:
                 if body is not None:
-                    response = self.session.post(url, params=params, json=body, timeout=TIMEOUT)
+                    response = self.session.post(url, params=params, json=body, timeout=timeout)
                 elif stream:
-                    response = self.session.get(url, params=params, timeout=TIMEOUT, stream=True)
+                    response = self.session.get(url, params=params, timeout=timeout, stream=True)
                 else:
-                    response = self.session.get(url, params=params, timeout=TIMEOUT)
-            except requests.exceptions.Timeout:
-                raise PdatumError(f"{self.url} took more than {TIMEOUT}s to answer. Try again.")
+                    response = self.session.get(url, params=params, timeout=timeout)
             except (requests.exceptions.MissingSchema, requests.exceptions.InvalidURL,
                     requests.exceptions.InvalidSchema):
                 raise PdatumError(
                     f"{self.url!r} is not a URL. Set one with: pdatum config --url https://..."
                 )
+            # Before Timeout: a ConnectTimeout is both, and a server that never
+            # answered the connection was not reached, not slow.
             except requests.exceptions.ConnectionError:
                 raise PdatumError(f"Could not reach {self.url}. Check the URL (pdatum config).")
+            except requests.exceptions.Timeout:
+                raise PdatumError(f"{self.url} took more than {TIMEOUT}s to answer. Try again.")
 
             if response.status_code == 429 and attempt < MAX_RETRIES:
                 try:

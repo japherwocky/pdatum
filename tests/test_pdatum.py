@@ -15,6 +15,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pdatum import cli, config, timespec  # noqa: E402
@@ -50,15 +52,18 @@ class FakeSession:
         self.headers = {}
         self.calls = []
         self.posted = []
+        self.timeouts = []
 
     def get(self, url, params=None, timeout=None, stream=False):
         path = url.split("/api/v1", 1)[1]
         self.calls.append((path, dict(params or {})))
+        self.timeouts.append(timeout)
         return self.answer(path, dict(params or {}))
 
     def post(self, url, params=None, json=None, timeout=None):
         path = url.split("/api/v1", 1)[1]
         self.calls.append((path, dict(params or {})))
+        self.timeouts.append(timeout)
         self.posted.append(json)
         return self.answer(path, dict(params or {}))
 
@@ -190,6 +195,32 @@ class ClientTestCase(unittest.TestCase):
             c.get("/jobs", brand="nope")
         self.assertEqual(caught.exception.code, "invalid_parameter")
         self.assertIn("brand", caught.exception.message)
+
+    def test_waits_as_long_as_the_server_may_take(self):
+        # nginx gives the server 180s. Waiting less turns a slow answer --
+        # a first awards lookup -- into an error, and the answer into waste.
+        c, session = self.client(lambda p, q: FakeResponse(body={"data": {}}))
+        c.get("/awards", name="Acme Corp")
+        c.post("/companies/resolve", {"name": "Acme"})
+        for connect, read in session.timeouts:
+            self.assertGreater(read, 180)
+            self.assertLess(connect, 60)
+
+    def test_slow_is_not_unreachable(self):
+        def raising(error):
+            def answer(path, params):
+                raise error
+            return answer
+
+        c, _ = self.client(raising(requests.exceptions.ReadTimeout()))
+        with self.assertRaises(PdatumError) as caught:
+            c.get("/awards", name="Acme Corp")
+        self.assertIn("to answer. Try again.", caught.exception.message)
+
+        c, _ = self.client(raising(requests.exceptions.ConnectTimeout()))
+        with self.assertRaises(PdatumError) as caught:
+            c.get("/me")
+        self.assertIn("Could not reach", caught.exception.message)
 
     def test_an_error_without_json_still_says_something(self):
         c, _ = self.client(lambda p, q: FakeResponse(502, None, text="<html>bad gateway"))
