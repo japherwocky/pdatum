@@ -55,9 +55,9 @@ pdatum awards "Acme Corp"
 | `pdatum jobs changes --since T` | Streams every job added, closed or reopened since `T`. |
 | `pdatum employers list / pull / get SLUG` | Employer records. Each fact names its source. |
 | `pdatum awards NAME... [--employer SLUG]` | Federal contracts, IDVs and grants to a company, from USAspending.gov: counts, amounts, agencies, and when the work ends. Any company, by its whole name. Loans are left out. |
-| `pdatum bdc book TICKER` | A business development company's book: its status, version, tables, and the caveats to read first. |
+| `pdatum bdc book TICKER` | A business development company's book: its status, version, tables, and the caveats to read first. Asking for one we've never read starts its first read, which takes a while. |
 | `pdatum bdc pull TICKER [--out DIR]` | Writes the whole book to a folder: `manifest.json` and one JSON-lines file per table, each checked against the manifest. |
-| `pdatum bdc request TICKER` | Asks for a lender that has not been read yet. Reading one takes a while. |
+| `pdatum bdc request TICKER` | Reads a lender again now, to take in what it has filed since, or after a read that failed. |
 | `pdatum companies resolve NAME` | Looks up which company a name belongs to: `matched`, `ambiguous` or `unknown`. Starts nothing. |
 | `pdatum companies request NAME` | Gives the same answer for any name. For a name we don't hold, it searches EDGAR for the BDCs that name it and reads them. That takes a while. |
 | `pdatum companies list / pull / get SLUG` | The registry: each company's names, and the lenders that hold it. |
@@ -87,6 +87,11 @@ pdatum bdc pull WHF --out whf/      # manifest.json + positions.jsonl, figures.j
 
 The same version is the same data, so a harness can cache on it. Quote the
 `figures` table rather than doing arithmetic on positions.
+
+Asking for a lender we've never read starts its first read. `pdatum bdc book
+FSK` says it's queued; ask again later, because a first read takes a while. A
+book is only rebuilt when asked: `pdatum bdc request WHF` reads what the lender
+has filed since. A ticker that isn't a business development company says so.
 
 ## Companies
 

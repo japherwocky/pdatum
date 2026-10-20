@@ -417,9 +417,12 @@ def book_path(ticker, table=None):
 
 def book(c, ticker, **params):
     """
-    A book's manifest, or what its first read is doing (a 202). A 404 is a
-    ticker nobody has asked for, and says how to ask from here: the server's
-    message names the API call, not the command.
+    A book's manifest, or what its read is doing (a 202): asking for a lender
+    never read starts its read. A 404 says why there is nothing to read -- not
+    a BDC, or a read that failed -- and gets how to read it again from here.
+
+    A server from before that answered a lender never read with a 404 naming
+    the API's POST; that one gets the command instead.
     """
     try:
         return c.get(book_path(ticker), pending_ok=True, **params)["data"]
@@ -427,13 +430,21 @@ def book(c, ticker, **params):
         if e.status != 404:
             raise
         t = ticker.strip().upper()
-        raise PdatumError(f"No book for {t}: nobody has asked for it. Ask with: pdatum bdc request {t}",
-                          code=e.code, status=e.status)
+        if "POST " in e.message:
+            message = f"No book for {t}: nobody has asked for it. Ask with: pdatum bdc request {t}"
+        elif params.get("recorded_at") is not None:
+            message = e.message
+        else:
+            message = f"{e.message} To read it again now: pdatum bdc request {t}"
+        raise PdatumError(message, code=e.code, status=e.status)
 
 
 @bdc_app.command("request")
 def bdc_request(ticker: str = TICKER):
-    """Ask for a lender's book. A lender not read before takes a while; follow it with: pdatum bdc book."""
+    """
+    Read a lender now: again, for what it has filed since, or after a read that
+    failed. pdatum bdc book starts a lender's first read by itself.
+    """
     data = client().post("/bdc/books", {"ticker": ticker})["data"]
     emit(data, lambda: console.print(
         f"{esc(data['ticker'])}: {esc(data['status'])}. "
@@ -444,6 +455,8 @@ def bdc_request(ticker: str = TICKER):
 def show_book(data):
     if "version" not in data:
         console.print(f"{esc(data['ticker'])}: {esc(data['status'])}, not read yet")
+        console.print(f"[dim]A first read takes a while. Ask again later: "
+                      f"pdatum bdc book {esc(data['ticker'])}[/dim]", soft_wrap=True)
         return
     as_of = timespec.show(data["as_of"])[:10] if data["as_of"] else "-"
     console.print(f"[bold]{esc(data['name'])}[/bold] ({esc(data['ticker'])})  "
@@ -896,7 +909,8 @@ Federal awards -- contracts, IDVs and grants, from USAspending, for any company 
 BDC books -- what a lender reports lending, from its SEC filings, by ticker:
   pdatum bdc book WHF            status, version, tables, and caveats: read those first
   pdatum bdc pull WHF --out whf  manifest.json + one JSON-lines file per table
-  pdatum bdc request SCM         a lender not read yet; reading one takes a while
+  pdatum bdc book SCM            a lender never read: this starts its read; ask again later
+  pdatum bdc request WHF         read a lender again now, for what it has filed since
 Quote the figures table (key, value, unit, definition) rather than doing
 arithmetic on positions. The same version is the same data; cache on it.
 
