@@ -882,7 +882,7 @@ A slug is the company in every book table. One merged away answers merged_into.
 WARN notices -- layoffs and closures states publish, every one from the states we read:
   pdatum warn states --json                   which states are read, when, and why not the rest
   pdatum warn list --state tx --notice-since 90d
-  pdatum warn pull --employer pfizer > warn.jsonl   or --company SLUG, --q TEXT
+  pdatum warn pull --state ca --state ny > warn.jsonl   or --employer SLUG, --company SLUG, --q TEXT
   pdatum warn changes --since 2026-09-01      new notices and new links; upsert by id
 A state we don't read is not a state with no layoffs: check warn states first.
 company and employer_slug link a notice to our records when the names are equal,

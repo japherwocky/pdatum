@@ -115,7 +115,7 @@ pdatum serves every notice from every state we read, in one shape.
 ```bash
 pdatum warn states                            # read this first
 pdatum warn list --state tx --notice-since 90d
-pdatum warn pull --employer pfizer > warn.jsonl
+pdatum warn pull --state ca --state ny > warn.jsonl
 ```
 
 Not every state is read, and a state we don't read isn't a state with no
