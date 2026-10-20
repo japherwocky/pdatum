@@ -7,9 +7,10 @@ is off, `--json` and `--api-key` are only taken from where they can be ours
 (never from another option's value, never after `--`), and long text never
 has to pass through a shell.
 
-Streams -- `jobs pull`, `jobs changes`, `employers pull`, `companies pull` --
-write JSON lines to stdout and progress to stderr, in either mode, so they can
-be piped straight into a file or another tool.
+Streams -- `jobs pull`, `jobs changes`, `employers pull`, `companies pull`,
+`warn pull`, `warn changes` -- write JSON lines to stdout and progress to
+stderr, in either mode, so they can be piped straight into a file or another
+tool.
 """
 
 import json
@@ -51,10 +52,15 @@ companies_app = typer.Typer(
     help="The registry: every private company a BDC we read holds, under every name it is filed as.",
     no_args_is_help=True,
 )
+warn_app = typer.Typer(
+    help="State WARN notices: layoffs and closures, every one from the states we read.",
+    no_args_is_help=True,
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(employers_app, name="employers")
 app.add_typer(bdc_app, name="bdc")
 app.add_typer(companies_app, name="companies")
+app.add_typer(warn_app, name="warn")
 app.add_typer(key_app, name="key")
 
 
@@ -630,6 +636,142 @@ def companies_request(name: List[str] = NAME):
     emit(data, lambda: show_answer(data))
 
 
+# -- WARN notices -----------------------------------------------------------------
+
+STATE = typer.Option(None, "--state", "-s", help="A two-letter state code. Repeat it for more.")
+WARN_COMPANY = typer.Option(None, "--company", help="A company slug (see: pdatum companies list).")
+WARN_EMPLOYER = typer.Option(None, "--employer", help="An employer slug (see: pdatum employers list).")
+WARN_Q = typer.Option(None, "--q", "-q", help="Text in the employer's name, as the state wrote it.")
+NOTICE_SINCE = typer.Option(None, "--notice-since", help="2026-09-01, 7d, or epoch seconds.")
+NOTICE_BEFORE = typer.Option(None, "--notice-before", help="2026-09-01, 7d, or epoch seconds.")
+
+
+def warn_filters(state, company, employer, q, notice_since, notice_before):
+    return dict(
+        state=[s.strip().lower() for s in state] if state else None,
+        company=company, employer=employer, q=q,
+        notice_since=when(notice_since, "--notice-since"),
+        notice_before=when(notice_before, "--notice-before"),
+    )
+
+
+def warn_table(notices):
+    table = Table(show_edge=False, pad_edge=False)
+    for column in ("id", "notice", "state", "employer", "workers", "location", "ours"):
+        table.add_column(column, overflow="fold")
+    for n in notices:
+        ours = ", ".join(x for x in (n["company"], n["employer_slug"]) if x)
+        table.add_row(
+            str(n["id"]), day(n["notice_at"]), esc(n["state"].upper()), esc(n["employer"]),
+            "-" if n["workers"] is None else f"{n['workers']:,}",
+            esc(n["location"] or ""), esc(ours),
+        )
+    return table
+
+
+@warn_app.command("list")
+def warn_list(
+    state: Optional[List[str]] = STATE, company: Optional[str] = WARN_COMPANY,
+    employer: Optional[str] = WARN_EMPLOYER, q: Optional[str] = WARN_Q,
+    notice_since: Optional[str] = NOTICE_SINCE, notice_before: Optional[str] = NOTICE_BEFORE,
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=500, help="How many to show."),
+):
+    """
+    The newest notices that match: one page. For all of them, use pull. "ours"
+    is the company and employer record the employer's name is, when it is one.
+    """
+    body = client().get(
+        "/warn", limit=limit,
+        **warn_filters(state, company, employer, q, notice_since, notice_before),
+    )
+
+    def render():
+        console.print(warn_table(body["data"]))
+        more = " -- pdatum warn pull for all of them" if body["next_cursor"] else ""
+        console.print(f"[dim]{fraction(len(body['data']), body['total'])}{more}. "
+                      f"Which states are read: pdatum warn states[/dim]", soft_wrap=True)
+
+    emit(body, render)
+
+
+@warn_app.command("count")
+def warn_count(
+    state: Optional[List[str]] = STATE, company: Optional[str] = WARN_COMPANY,
+    employer: Optional[str] = WARN_EMPLOYER, q: Optional[str] = WARN_Q,
+    notice_since: Optional[str] = NOTICE_SINCE, notice_before: Optional[str] = NOTICE_BEFORE,
+):
+    """How many notices match."""
+    body = client().get(
+        "/warn/count", **warn_filters(state, company, employer, q, notice_since, notice_before))
+    emit(body["data"], lambda: console.print(f"{body['data']['count']:,}"))
+
+
+@warn_app.command("pull")
+def warn_pull(
+    state: Optional[List[str]] = STATE, company: Optional[str] = WARN_COMPANY,
+    employer: Optional[str] = WARN_EMPLOYER, q: Optional[str] = WARN_Q,
+    notice_since: Optional[str] = NOTICE_SINCE, notice_before: Optional[str] = NOTICE_BEFORE,
+    max_records: Optional[int] = typer.Option(None, "--max", min=1, help="Stop after this many."),
+):
+    """Every notice that matches, as JSON lines on stdout."""
+    filters = warn_filters(state, company, employer, q, notice_since, notice_before)
+    written = 0
+    for notice in client().pages("/warn", on_page=pull_progress("notices"), limit=500, **filters):
+        line(notice)
+        written += 1
+        if max_records and written >= max_records:
+            break
+
+
+@warn_app.command("changes")
+def warn_changes(
+    since: str = typer.Option(..., "--since", help="2026-09-01, 7d, or epoch seconds."),
+    state: Optional[List[str]] = STATE,
+):
+    """
+    Every notice read for the first time, or newly linked to a company or
+    employer record, since then, as JSON lines. Upsert by id. The last line on
+    stderr says what --since to use next time.
+    """
+    start = when(since, "--since")
+    latest = None
+    for notice in client().pages(
+        "/warn/changes", on_page=pull_progress("changes"), since=start, limit=500,
+        state=[s.strip().lower() for s in state] if state else None,
+    ):
+        line(notice)
+        latest = notice["changed_at"]
+    resume = (latest - 1) if latest is not None else start
+    progress(f"next time: pdatum warn changes --since {resume}")
+
+
+@warn_app.command("states")
+def warn_states():
+    """
+    Every state, whether we read it or not, and why not. Read this before
+    counting anything by state: a state we don't read isn't one with no layoffs.
+    """
+    data = client().get("/warn/states")["data"]
+
+    def render():
+        table = Table(show_edge=False, pad_edge=False)
+        for column in ("state", "last read", "notices", "newest", "not read because"):
+            table.add_column(column, overflow="fold")
+        for s in data:
+            if s["read"]:
+                table.add_row(esc(s["state"].upper()), day(s["last_read_at"]),
+                              f"{s['notices']:,}", day(s["last_notice_at"]), "")
+            else:
+                table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "",
+                              f"{s['notices']:,}" if s["notices"] else "", "",
+                              f"[dim]{esc(s['unread_because'] or '')}[/dim]")
+        console.print(table)
+        read = sum(1 for s in data if s["read"])
+        console.print(f"[dim]{read} of {len(data)} read[/dim]")
+
+    emit(data, render)
+
+
 # -- the key, the server, and you ------------------------------------------------
 
 
@@ -734,6 +876,15 @@ Companies -- the private borrowers those lenders hold, under every name they are
   pdatum companies pull --lender WHF > companies.jsonl
 Matching is exact but for case and spacing; "similar" is never a match.
 A slug is the company in every book table. One merged away answers merged_into.
+
+WARN notices -- layoffs and closures states publish, every one from the states we read:
+  pdatum warn states --json                   which states are read, when, and why not the rest
+  pdatum warn list --state tx --notice-since 90d
+  pdatum warn pull --employer pfizer > warn.jsonl   or --company SLUG, --q TEXT
+  pdatum warn changes --since 2026-09-01      new notices and new links; upsert by id
+A state we don't read is not a state with no layoffs: check warn states first.
+company and employer_slug link a notice to our records when the names are equal,
+which is not proof that it is the same business.
 
 Times take 2026-09-01, 7d / 12h / 30m, or epoch seconds.
 Every command takes --json; errors go to stderr, exit code non-zero.

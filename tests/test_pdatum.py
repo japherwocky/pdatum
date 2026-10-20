@@ -821,3 +821,100 @@ class CompaniesTestCase(Isolated):
         self.assertEqual([json.loads(x)["slug"] for x in out.splitlines()], ["c0", "c1", "c2"])
         self.assertEqual(session.calls[0][1]["lender"], "WHF")
         self.assertIn("pulled 3 of 3 companies", err)
+
+
+class WarnTestCase(Isolated):
+    """pdatum warn: state WARN notices, and which states are read (wolverine card #993)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def notice(self, n, employer="Acme Corp", **links):
+        record = {"id": n, "state": "tx", "employer": employer, "location": "Bedford",
+                  "workers": 1200, "kind": None, "notice_at": 1716422400,
+                  "effective_at": 1716249600, "company": None, "matched": None,
+                  "employer_slug": None, "observed_at": 1790553600, "changed_at": 1790553600 + n,
+                  "source": "https://www.twc.texas.gov/data-reports/warn-notice"}
+        record.update(links)
+        return record
+
+    def test_list_sends_the_filters_and_shows_what_is_ours(self):
+        records = [self.notice(1, company="acme-buyer-inc", employer_slug="acme")]
+        code, out, err, session = self.run_cli(
+            "warn", "list", "--state", "TX", "-s", "ca", "--company", "acme-buyer-inc",
+            "-q", "acme", "--notice-since", "1700000000", answer=pages_of(records, 20))
+        self.assertEqual(code, 0, err)
+        path, params = session.calls[0]
+        self.assertEqual(path, "/warn")
+        self.assertEqual(params["state"], ["tx", "ca"])
+        self.assertEqual((params["company"], params["q"], params["notice_since"]),
+                         ("acme-buyer-inc", "acme", 1700000000))
+        for text in ("2024-05-23", "TX", "Acme Corp", "1,200", "acme-buyer-inc, acme",
+                     "pdatum warn states"):
+            self.assertIn(text, out)
+
+    def test_hostile_employer_names_print_as_written(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "warn", "list", answer=pages_of([self.notice(1, employer=name)], 20))
+                self.assertEqual(code, 0, err)
+                self.assertIn(name, out)
+
+    def test_pull_streams_every_page(self):
+        records = [self.notice(i) for i in range(3)]
+        code, out, err, session = self.run_cli("warn", "pull", "--employer", "acme",
+                                               answer=pages_of(records, 2))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([json.loads(x)["id"] for x in out.splitlines()], [0, 1, 2])
+        self.assertEqual(session.calls[0][1]["employer"], "acme")
+        self.assertIn("pulled 3 of 3 notices", err)
+
+    def test_changes_says_where_to_start_next_time(self):
+        records = [self.notice(i) for i in (1, 2)]
+        code, out, err, session = self.run_cli("warn", "changes", "--since", "1790000000",
+                                               answer=pages_of(records, 20))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/warn/changes",
+                                            {"since": 1790000000, "limit": 500}))
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("pdatum warn changes --since 1790553601", err)
+
+    def test_count_prints_the_number(self):
+        code, out, err, session = self.run_cli(
+            "warn", "count", "--state", "nj",
+            answer=lambda p, q: FakeResponse(body={"data": {"count": 2385}}))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/warn/count", {"state": ["nj"]}))
+        self.assertEqual(out.strip(), "2,385")
+
+    def test_states_shows_what_is_read_and_why_the_rest_is_not(self):
+        data = [
+            {"state": "tx", "read": True, "unread_because": None,
+             "source": {"name": "Texas Workforce Commission", "url": "https://x.test"},
+             "last_read_at": 1790035200, "rows_read": 2510, "notices": 2510,
+             "first_notice_at": 1577923200, "last_notice_at": 1789948800},
+            {"state": "va", "read": False,
+             "unread_because": "drives a stealth [headless] browser", "source": None,
+             "last_read_at": None, "rows_read": None, "notices": 0,
+             "first_notice_at": None, "last_notice_at": None},
+        ]
+        code, out, err, _ = self.run_cli(
+            "warn", "states", answer=lambda p, q: FakeResponse(body={"data": data}))
+        self.assertEqual(code, 0, err)
+        # The table folds a long cell, so the reason is looked for in pieces.
+        for text in ("TX", "2026-09-22", "2,510", "VA", "stealth", "[headless]",
+                     "1 of 2 read"):
+            self.assertIn(text, out)
+
+        code, out, err, _ = self.run_cli(
+            "warn", "states", "--json", answer=lambda p, q: FakeResponse(body={"data": data}))
+        self.assertEqual(json.loads(out), data)
+
+    def test_a_bad_time_is_a_usage_error(self):
+        code, _, err, session = self.run_cli("warn", "list", "--notice-since", "someday")
+        self.assertEqual(code, 2)
+        # Not the option's name: rich colours it on CI, splitting it in two.
+        self.assertIn("'someday' is not a time", err)
+        self.assertEqual(session.calls, [])
