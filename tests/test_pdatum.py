@@ -696,6 +696,33 @@ class BookTestCase(Isolated):
                 self.assertIn("pdatum bdc request FSK", err)
                 self.assertNotIn("POST", err)
 
+    def test_a_book_with_nothing_to_read_says_why_and_how_to_read_it_again(self):
+        """A server that starts first reads itself answers 404 only with a reason."""
+        why = ("No book for AAPL: its read on 2026-10-21 failed. AAPL (Apple Inc.) is not "
+               "a business development company: it has never elected to be regulated as one")
+        answer = lambda p, q: FakeResponse(404, {"error": {"code": "not_found", "message": why}})
+        code, _, err, _ = self.run_cli("bdc", "book", "aapl", answer=answer)
+        self.assertEqual(code, 1)
+        self.assertIn("not a business development company", err)
+        self.assertIn("pdatum bdc request AAPL", err)
+
+        # as of a time, there is nothing to read again: the reason alone
+        then = "No book for WHF was recorded by 2023-11-14."
+        answer = lambda p, q: FakeResponse(404, {"error": {"code": "not_found", "message": then}})
+        code, _, err, _ = self.run_cli("bdc", "book", "WHF", "--recorded-at", "1700000000",
+                                       answer=answer)
+        self.assertEqual(code, 1)
+        self.assertIn("recorded by 2023-11-14", err)
+        self.assertNotIn("bdc request", err)
+
+    def test_a_first_read_says_to_come_back(self):
+        answer = lambda p, q: FakeResponse(202, {"data": {"ticker": "FSK", "status": "queued"}},
+                                           {"Retry-After": "600"})
+        code, out, err, _ = self.run_cli("bdc", "book", "FSK", answer=answer)
+        self.assertEqual(code, 0, err)
+        self.assertIn("FSK: queued, not read yet", out)
+        self.assertIn("Ask again later: pdatum bdc book FSK", out)
+
     def test_pull_refuses_a_book_not_read_yet(self):
         answer = lambda p, q: FakeResponse(202, {"data": {"ticker": "WHF", "status": "queued"}})
         code, _, err, _ = self.run_cli("bdc", "pull", "WHF", answer=answer)
