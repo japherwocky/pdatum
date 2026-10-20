@@ -415,6 +415,22 @@ def book_path(ticker, table=None):
     return path + "/" + table if table else path
 
 
+def book(c, ticker, **params):
+    """
+    A book's manifest, or what its first read is doing (a 202). A 404 is a
+    ticker nobody has asked for, and says how to ask from here: the server's
+    message names the API call, not the command.
+    """
+    try:
+        return c.get(book_path(ticker), pending_ok=True, **params)["data"]
+    except PdatumError as e:
+        if e.status != 404:
+            raise
+        t = ticker.strip().upper()
+        raise PdatumError(f"No book for {t}: nobody has asked for it. Ask with: pdatum bdc request {t}",
+                          code=e.code, status=e.status)
+
+
 @bdc_app.command("request")
 def bdc_request(ticker: str = TICKER):
     """Ask for a lender's book. A lender not read before takes a while; follow it with: pdatum bdc book."""
@@ -453,7 +469,7 @@ def bdc_book(
         None, "--recorded-at", help="The book as we held it then: 2026-09-01, 7d, or epoch seconds."),
 ):
     """A lender's book: its status, version, tables, and the caveats to read first."""
-    data = client().get(book_path(ticker), recorded_at=when(recorded_at, "--recorded-at"))["data"]
+    data = book(client(), ticker, recorded_at=when(recorded_at, "--recorded-at"))
     emit(data, lambda: show_book(data))
 
 
@@ -470,7 +486,7 @@ def bdc_pull(
     file per table, each checked against the manifest. Progress goes to stderr.
     """
     c = client()
-    data = c.get(book_path(ticker))["data"]
+    data = book(c, ticker)
     if "version" not in data:
         raise PdatumError(f"{data['ticker']} has no book yet: it is {data['status']}. "
                           f"Follow it with: pdatum bdc book {data['ticker']}")
@@ -655,6 +671,17 @@ def warn_filters(state, company, employer, q, notice_since, notice_before):
     )
 
 
+def note_unread(body):
+    """
+    The states the server left out of this answer, on stderr, where a count
+    piped into a script never meets it: a state not read yet has no notices
+    here, which is not the same as having none.
+    """
+    if body.get("unread"):
+        progress("not in this answer, not read yet: %s. Which and why: pdatum warn states"
+                 % ", ".join(s.upper() for s in body["unread"]))
+
+
 def warn_table(notices):
     table = Table(show_edge=False, pad_edge=False)
     for column in ("id", "notice", "state", "employer", "workers", "location", "ours"):
@@ -684,6 +711,7 @@ def warn_list(
         "/warn", limit=limit,
         **warn_filters(state, company, employer, q, notice_since, notice_before),
     )
+    note_unread(body)
 
     def render():
         console.print(warn_table(body["data"]))
@@ -703,7 +731,9 @@ def warn_count(
     """How many notices match."""
     body = client().get(
         "/warn/count", **warn_filters(state, company, employer, q, notice_since, notice_before))
-    emit(body["data"], lambda: console.print(f"{body['data']['count']:,}"))
+    note_unread(body)
+    data = dict(body["data"], **({"unread": body["unread"]} if "unread" in body else {}))
+    emit(data, lambda: console.print(f"{data['count']:,}"))
 
 
 @warn_app.command("pull")
@@ -716,7 +746,8 @@ def warn_pull(
     """Every notice that matches, as JSON lines on stdout."""
     filters = warn_filters(state, company, employer, q, notice_since, notice_before)
     written = 0
-    for notice in client().pages("/warn", on_page=pull_progress("notices"), limit=500, **filters):
+    for notice in client().pages("/warn", on_page=pull_progress("notices"), on_first=note_unread,
+                                 limit=500, **filters):
         line(notice)
         written += 1
         if max_records and written >= max_records:
@@ -736,8 +767,8 @@ def warn_changes(
     start = when(since, "--since")
     latest = None
     for notice in client().pages(
-        "/warn/changes", on_page=pull_progress("changes"), since=start, limit=500,
-        state=[s.strip().lower() for s in state] if state else None,
+        "/warn/changes", on_page=pull_progress("changes"), on_first=note_unread,
+        since=start, limit=500, state=[s.strip().lower() for s in state] if state else None,
     ):
         line(notice)
         latest = notice["changed_at"]
@@ -760,7 +791,8 @@ def warn_states():
         for s in data:
             if s["read"]:
                 table.add_row(esc(s["state"].upper()), day(s["last_read_at"]),
-                              f"{s['notices']:,}", day(s["last_notice_at"]), "")
+                              f"{s['notices']:,}", day(s["last_notice_at"]),
+                              "" if s["last_read_at"] else "[dim]waiting for its first read[/dim]")
             else:
                 table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "",
                               f"{s['notices']:,}" if s["notices"] else "", "",
@@ -885,6 +917,8 @@ WARN notices -- layoffs and closures states publish, every one from the states w
   pdatum warn pull --state ca --state ny > warn.jsonl   or --employer SLUG, --company SLUG, --q TEXT
   pdatum warn changes --since 2026-09-01      new notices and new links; upsert by id
 A state we don't read is not a state with no layoffs: check warn states first.
+A state waiting for its first read answers "Not read yet" (exit 1), never a zero,
+and an answer that leaves states out names them on stderr.
 company and employer_slug link a notice to our records when the names are equal,
 which is not proof that it is the same business.
 

@@ -35,6 +35,28 @@ class PdatumError(Exception):
         self.status = status
 
 
+class NotReady(PdatumError):
+    """
+    A 202 where data was asked for: it is being read, and is not here yet.
+
+    Not an error on the server's side, but it must not reach a command as data:
+    a 202's body says what is being read, in a different shape, and a WARN
+    count or listing would otherwise print nothing, or a zero, as the answer.
+    """
+
+
+def _later(retry_after):
+    """Retry-After seconds, said the way a person would: 'in about 5 minutes'."""
+    try:
+        seconds = int(retry_after)
+    except (TypeError, ValueError):
+        return "later"
+    minutes = max(1, round(seconds / 60))
+    if minutes < 90:
+        return f"in about {minutes} minute{'s' if minutes != 1 else ''}"
+    return f"in about {round(minutes / 60)} hours"
+
+
 def _param(value):
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -52,7 +74,7 @@ class Client:
             self.session.headers["Authorization"] = f"Bearer {key}"
         self._sleep = sleep
 
-    def _send(self, path, params=None, body=None, stream=False):
+    def _send(self, path, params=None, body=None, stream=False, pending_ok=False):
         url = f"{self.url}/api/v1{path}"
         params = {k: _param(v) for k, v in (params or {}).items() if v is not None}
 
@@ -88,7 +110,24 @@ class Client:
 
         if response.status_code >= 400:
             raise self._error(response)
+        if response.status_code == 202 and not pending_ok:
+            raise self._not_ready(response)
         return response
+
+    @staticmethod
+    def _not_ready(response):
+        try:
+            data = response.json().get("data") or {}
+        except (ValueError, AttributeError):
+            data = {}
+        states = data.get("states") if isinstance(data, dict) else None
+        if states:
+            what = "Not read yet: %s, waiting for a first read." % ", ".join(
+                str(s).upper() for s in states)
+        else:
+            what = "Not here yet: it is being read."
+        later = _later(response.headers.get("Retry-After"))
+        return NotReady(f"{what} Try again {later}.", code="not_ready", status=202)
 
     @staticmethod
     def _error(response):
@@ -104,13 +143,16 @@ class Client:
             message += " Set PDATUM_API_KEY, or run: pdatum key save <key>"
         return PdatumError(message, code=code, status=response.status_code)
 
-    def get(self, path, **params):
-        """One request; the parsed JSON body."""
-        return self._send(path, params).json()
+    def get(self, path, pending_ok=False, **params):
+        """
+        One request; the parsed JSON body. A 202 raises NotReady unless
+        `pending_ok`, for a caller that shows what is being read.
+        """
+        return self._send(path, params, pending_ok=pending_ok).json()
 
     def post(self, path, body):
-        """One POST with a JSON body; the parsed JSON answer."""
-        return self._send(path, body=body).json()
+        """One POST with a JSON body; the parsed JSON answer. A 202 is its usual answer."""
+        return self._send(path, body=body, pending_ok=True).json()
 
     def text(self, path):
         return self._send(path).text
@@ -132,14 +174,17 @@ class Client:
                     lines += chunk.count(b"\n")
         return digest.hexdigest(), lines, response.headers
 
-    def pages(self, path, on_page=None, **params):
+    def pages(self, path, on_page=None, on_first=None, **params):
         """
         Every record a list endpoint returns, following next_cursor to the
-        end. on_page(received so far, total) is called after each page.
+        end. on_first(body) is called with the first page, before any of its
+        records; on_page(received so far, total) after each page.
         """
         cursor, received = None, 0
         while True:
             body = self.get(path, cursor=cursor, **params)
+            if on_first is not None and cursor is None:
+                on_first(body)
             for record in body["data"]:
                 yield record
             received += len(body["data"])

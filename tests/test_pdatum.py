@@ -20,7 +20,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pdatum import cli, config, timespec  # noqa: E402
-from pdatum.client import MAX_RETRIES, Client, PdatumError  # noqa: E402
+from pdatum.client import MAX_RETRIES, Client, NotReady, PdatumError  # noqa: E402
 from pdatum.output import reader_left, run_quietly  # noqa: E402
 
 KEY = "pdatum_" + "k" * 32
@@ -221,6 +221,21 @@ class ClientTestCase(unittest.TestCase):
         with self.assertRaises(PdatumError) as caught:
             c.get("/me")
         self.assertIn("Could not reach", caught.exception.message)
+
+    def test_a_202_is_never_handed_back_as_the_answer(self):
+        """It says what is being read, in another shape: a count would read it as nothing."""
+        waiting = FakeResponse(202, {"data": {"status": "waiting", "states": ["ny", "tx"]}},
+                               {"Retry-After": "3600"})
+        c, _ = self.client(lambda p, q: waiting)
+        with self.assertRaises(NotReady) as caught:
+            c.get("/warn/count", state=["tx", "ny"])
+        self.assertEqual((caught.exception.status, caught.exception.code), (202, "not_ready"))
+        self.assertIn("Not read yet: NY, TX", caught.exception.message)
+        self.assertIn("in about 60 minutes", caught.exception.message)
+
+        # unless the caller shows what is being read, and a POST that queues is answered so
+        self.assertEqual(c.get("/bdc/books/SCM", pending_ok=True)["data"]["status"], "waiting")
+        self.assertEqual(c.post("/bdc/books", {"ticker": "SCM"})["data"]["status"], "waiting")
 
     def test_an_error_without_json_still_says_something(self):
         c, _ = self.client(lambda p, q: FakeResponse(502, None, text="<html>bad gateway"))
@@ -669,6 +684,18 @@ class BookTestCase(Isolated):
         self.assertEqual(code, 1)
         self.assertIn("figures arrived different from what the manifest promises", err)
 
+    def test_a_book_nobody_asked_for_says_how_to_ask(self):
+        """The server's message names the API call; from here, the command is the answer."""
+        answer = lambda p, q: FakeResponse(404, {"error": {
+            "code": "not_found",
+            "message": 'No book for FSK. POST /api/v1/bdc/books with {"ticker": "FSK"} to have it read.'}})
+        for command in ("book", "pull"):
+            with self.subTest(command=command):
+                code, _, err, _ = self.run_cli("bdc", command, "fsk", answer=answer)
+                self.assertEqual(code, 1)
+                self.assertIn("pdatum bdc request FSK", err)
+                self.assertNotIn("POST", err)
+
     def test_pull_refuses_a_book_not_read_yet(self):
         answer = lambda p, q: FakeResponse(202, {"data": {"ticker": "WHF", "status": "queued"}})
         code, _, err, _ = self.run_cli("bdc", "pull", "WHF", answer=answer)
@@ -942,6 +969,53 @@ class WarnTestCase(Isolated):
         code, out, err, _ = self.run_cli(
             "warn", "states", "--json", answer=lambda p, q: FakeResponse(body={"data": data}))
         self.assertEqual(json.loads(out), data)
+
+    def test_a_state_waiting_for_its_first_read_is_never_a_zero(self):
+        waiting = lambda p, q: FakeResponse(
+            202, {"data": {"status": "waiting", "states": ["tx"]}}, {"Retry-After": "3600"})
+        for args in (("count", "--state", "tx"), ("list", "--state", "tx"),
+                     ("pull", "--state", "tx"), ("changes", "--since", "1", "--state", "tx")):
+            with self.subTest(args=args):
+                code, out, err, _ = self.run_cli("warn", *args, answer=waiting)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertIn("Not read yet: TX", err)
+
+    def test_an_answer_that_leaves_states_out_says_which_on_stderr(self):
+        partial = lambda p, q: FakeResponse(body={"data": {"count": 2}, "unread": ["tx", "ny"]})
+        code, out, err, _ = self.run_cli("warn", "count", answer=partial)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "2", "stdout stays a number a script can read")
+        self.assertIn("not in this answer, not read yet: TX, NY", err)
+
+        code, out, err, _ = self.run_cli("warn", "count", "--json", answer=partial)
+        self.assertEqual(json.loads(out), {"count": 2, "unread": ["tx", "ny"]})
+
+        # a stream says so before its first record
+        page = lambda p, q: FakeResponse(body={"data": [self.notice(1)], "next_cursor": None,
+                                                "total": 1, "unread": ["tx"]})
+        code, out, err, _ = self.run_cli("warn", "pull", answer=page)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(out.splitlines()), 1)
+        self.assertIn("not in this answer, not read yet: TX", err)
+
+    def test_a_complete_answer_or_an_older_server_adds_nothing(self):
+        for body in ({"data": {"count": 5}, "unread": []}, {"data": {"count": 5}}):
+            with self.subTest(body=body):
+                code, out, err, _ = self.run_cli(
+                    "warn", "count", "--json", answer=lambda p, q, b=body: FakeResponse(body=b))
+                self.assertEqual(code, 0, err)
+                self.assertNotIn("not read yet", err)
+                self.assertEqual(json.loads(out)["count"], 5)
+
+    def test_states_marks_one_waiting_for_its_first_read(self):
+        data = [{"state": "tx", "read": True, "unread_because": None, "source": None,
+                 "last_read_at": None, "rows_read": None, "notices": 0,
+                 "first_notice_at": None, "last_notice_at": None}]
+        code, out, err, _ = self.run_cli(
+            "warn", "states", answer=lambda p, q: FakeResponse(body={"data": data}))
+        self.assertEqual(code, 0, err)
+        self.assertIn("waiting for its first", out)
 
     def test_a_bad_time_is_a_usage_error(self):
         code, _, err, session = self.run_cli("warn", "list", "--notice-since", "someday")

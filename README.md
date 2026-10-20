@@ -120,9 +120,15 @@ pdatum warn pull --state ca --state ny > warn.jsonl
 
 Not every state is read, and a state we don't read isn't a state with no
 layoffs. `pdatum warn states` says which states are read, when each was last
-read, and why we don't read the rest. A notice links to a company and to an
-employer record when the employer's name is theirs. That's a match on the
-name, not proof that it's the same business.
+read, and why we don't read the rest. So no command answers a state it holds
+nothing from with a zero. Asking only about states that haven't had their
+first read yet says "Not read yet" and exits 1. Asking only about states we
+don't read is an error that says why. An answer that leaves some states out
+lists them on stderr.
+
+A notice links to a company and to an employer record when the employer's
+name is theirs. That's a match on the name, not proof that it's the same
+business.
 
 The filters are `--state` (repeat it for more than one), `--company`,
 `--employer`, `-q`, `--notice-since` and `--notice-before`.
