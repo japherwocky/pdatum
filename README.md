@@ -1,9 +1,10 @@
 # pdatum
 
 Job postings, the employers behind them, federal awards to any company, BDC
-lenders' books and the private companies they hold, and state WARN layoff
-notices, from the command line. Built for scripts and AI agents: everything
-prints JSON on request, errors go to stderr, and large pulls stream JSON lines.
+lenders' books and the private companies they hold, state WARN layoff notices,
+and franchisors' filings with the states, from the command line. Built for
+scripts and AI agents: everything prints JSON on request, errors go to stderr,
+and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
 
@@ -64,6 +65,9 @@ pdatum awards "Acme Corp"
 | `pdatum warn states` | Lists every state, whether we read it or not: when it was last read, how many notices we hold, and why we don't read the rest. |
 | `pdatum warn list / count / pull [filters]` | State WARN notices of layoffs and closures, newest notice first. |
 | `pdatum warn changes --since T` | Streams every notice read for the first time, or newly linked to one of our records, since `T`. |
+| `pdatum franchises states` | Lists every state, whether we read its franchise filings or not, and why not. |
+| `pdatum franchises list / count / pull [filters]` | Franchisors' registrations and exemption notices with the states, newest first. |
+| `pdatum franchises changes --since T` | Streams every filing read for the first time, changed by its state, or newly linked to one of our records, since `T`. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |
 | `pdatum skill` | Prints short instructions for an AI agent to save. |
 | `pdatum guide` | Prints the full API reference, from the server. |
@@ -137,6 +141,33 @@ business.
 
 The filters are `--state` (repeat it for more than one), `--company`,
 `--employer`, `-q`, `--notice-since` and `--notice-before`.
+
+## Franchise filings
+
+Before a franchisor sells franchises in some states, it files there: a
+registration, or a notice that it's exempt. pdatum serves every filing from
+every state we read, in one shape. Texas comes first, with every filing back
+to 1985.
+
+```bash
+pdatum franchises states                      # read this first
+pdatum franchises list -q "snap fitness"
+pdatum franchises pull --status terminated --filed-since 365d > ended.jsonl
+```
+
+A filing gives the franchisor's legal name, its brands and any names it gave
+up, in `names`. A franchisor usually files under a company named for its
+brand, not the company a lender holds: Lift Brands files as Snap Fitness, Inc.
+So a filing links to a company in two ways. One is by name, which is a match
+on the name, not proof. The other is a link someone reviewed, whose
+`evidence` says what it rests on; the table marks those "(reviewed)".
+
+States work as they do for WARN notices: check `pdatum franchises states`
+first, a state waiting for its first read says "Not read yet", and an answer
+that leaves states out lists them on stderr.
+
+The filters are `--state`, `--company`, `--employer`, `-q`, `--status`
+(`registered`, `exempt` or `terminated`), `--filed-since` and `--filed-before`.
 
 ## Keeping a copy in sync
 

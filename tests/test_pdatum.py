@@ -1050,3 +1050,128 @@ class WarnTestCase(Isolated):
         # Not the option's name: rich colours it on CI, splitting it in two.
         self.assertIn("'someday' is not a time", err)
         self.assertEqual(session.calls, [])
+
+
+class FranchisesTestCase(Isolated):
+    """pdatum franchises: franchisors' state filings, and which states are read (wolverine card #1048)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def filing(self, n, name="PP FRANCHISE LLC", brands=(), **fields):
+        record = {
+            "id": n, "state": "tx", "filing": "2025-0413", "filed_as": name, "name": name,
+            "names": [{"name": name, "kind": "legal"}]
+            + [{"name": b, "kind": "trade"} for b in brands],
+            "kind": "exemption", "status": "exempt", "filed_at": 1753142400,
+            "registered_at": None, "exempt_at": 1753142400, "terminated_at": None,
+            "address": "3275 NEWPORT HIGHWAY, SEVIERVILLE, TN 37876", "city": "SEVIERVILLE",
+            "region": "TN", "zip": "37876", "company": None, "matched": None, "evidence": None,
+            "employer_slug": None, "observed_at": 1793289600, "changed_at": 1793289600 + n,
+            "source": "https://direct.sos.state.tx.us/businessopportunity/BusOpSearch.asp",
+        }
+        record.update(fields)
+        return record
+
+    def test_list_sends_the_filters_and_shows_brands_and_what_is_ours(self):
+        records = [
+            self.filing(1, company="pepper-palace-inc", evidence="California's order"),
+            self.filing(2, name="Snap Fitness Inc", brands=("Snap Fitness",),
+                        company="lift-brands", matched="Snap Fitness Holdings Inc"),
+        ]
+        code, out, err, session = self.run_cli(
+            "franchises", "list", "--state", "TX", "--status", "exempt", "-q", "fitness",
+            "--filed-since", "1700000000", answer=pages_of(records, 20))
+        self.assertEqual(code, 0, err)
+        path, params = session.calls[0]
+        self.assertEqual(path, "/franchises")
+        self.assertEqual((params["state"], params["status"], params["q"], params["filed_since"]),
+                         (["tx"], "exempt", "fitness", 1700000000))
+        for text in ("2025-07-22", "PP FRANCHISE LLC", "pepper-palace-inc", "(reviewed)",
+                     "Snap Fitness", "lift-brands", "pdatum franchises states"):
+            self.assertIn(text, out)
+        self.assertNotIn("lift-brands (reviewed)", out, "a link by name is not a review")
+
+    def test_hostile_names_print_as_written(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "franchises", "list",
+                    answer=pages_of([self.filing(1, name=name, brands=(name,))], 20))
+                self.assertEqual(code, 0, err)
+                self.assertIn(name, out)
+
+    def test_pull_streams_every_page(self):
+        records = [self.filing(i) for i in range(3)]
+        code, out, err, session = self.run_cli("franchises", "pull", "--company", "pepper-palace-inc",
+                                               answer=pages_of(records, 2))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([json.loads(x)["id"] for x in out.splitlines()], [0, 1, 2])
+        self.assertEqual(session.calls[0][1]["company"], "pepper-palace-inc")
+        self.assertIn("pulled 3 of 3 filings", err)
+
+    def test_changes_says_where_to_start_next_time(self):
+        records = [self.filing(i) for i in (1, 2)]
+        code, out, err, session = self.run_cli("franchises", "changes", "--since", "1793000000",
+                                               answer=pages_of(records, 20))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/franchises/changes",
+                                            {"since": 1793000000, "limit": 500}))
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("pdatum franchises changes --since 1793289601", err)
+
+    def test_count_prints_the_number(self):
+        code, out, err, session = self.run_cli(
+            "franchises", "count", "--status", "terminated",
+            answer=lambda p, q: FakeResponse(body={"data": {"count": 707}}))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/franchises/count", {"status": "terminated"}))
+        self.assertEqual(out.strip(), "707")
+
+    def test_states_shows_what_is_read_and_why_the_rest_is_not(self):
+        data = [
+            {"state": "tx", "read": True, "unread_because": None,
+             "source": {"name": "Texas Secretary of State", "url": "https://x.test"},
+             "last_read_at": 1793289600, "rows_read": 16348, "filings": 16320,
+             "first_filed_at": 501206400, "last_filed_at": 1793116800},
+            {"state": "in", "read": False,
+             "unread_because": "the search puts up a [reCAPTCHA], which we do not solve",
+             "source": None, "last_read_at": None, "rows_read": None, "filings": 0,
+             "first_filed_at": None, "last_filed_at": None},
+        ]
+        code, out, err, _ = self.run_cli(
+            "franchises", "states", answer=lambda p, q: FakeResponse(body={"data": data}))
+        self.assertEqual(code, 0, err)
+        # The table folds a long cell, so the reason is looked for in pieces.
+        for text in ("TX", "2026-10-29", "16,320", "IN", "[reCAPTCHA]", "1 of 2 read"):
+            self.assertIn(text, out)
+
+        code, out, err, _ = self.run_cli(
+            "franchises", "states", "--json",
+            answer=lambda p, q: FakeResponse(body={"data": data}))
+        self.assertEqual(json.loads(out), data)
+
+    def test_a_state_waiting_for_its_first_read_is_never_a_zero(self):
+        waiting = lambda p, q: FakeResponse(
+            202, {"data": {"status": "waiting", "states": ["tx"]}}, {"Retry-After": "3600"})
+        for args in (("count",), ("list",), ("pull",), ("changes", "--since", "1")):
+            with self.subTest(args=args):
+                code, out, err, _ = self.run_cli("franchises", *args, answer=waiting)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertIn("Not read yet: TX", err)
+
+    def test_an_answer_that_leaves_states_out_points_at_franchises_states(self):
+        partial = lambda p, q: FakeResponse(body={"data": {"count": 2}, "unread": ["tx"]})
+        code, out, err, _ = self.run_cli("franchises", "count", answer=partial)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "2")
+        self.assertIn("not in this answer, not read yet: TX. Which and why: "
+                      "pdatum franchises states", err)
+
+    def test_a_bad_time_is_a_usage_error(self):
+        code, _, err, session = self.run_cli("franchises", "list", "--filed-since", "someday")
+        self.assertEqual(code, 2)
+        self.assertIn("'someday' is not a time", err)
+        self.assertEqual(session.calls, [])
