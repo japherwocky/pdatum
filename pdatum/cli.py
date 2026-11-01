@@ -8,9 +8,9 @@ is off, `--json` and `--api-key` are only taken from where they can be ours
 has to pass through a shell.
 
 Streams -- `jobs pull`, `jobs changes`, `employers pull`, `companies pull`,
-`warn pull`, `warn changes` -- write JSON lines to stdout and progress to
-stderr, in either mode, so they can be piped straight into a file or another
-tool.
+`warn pull`, `warn changes`, `franchises pull`, `franchises changes` -- write
+JSON lines to stdout and progress to stderr, in either mode, so they can be
+piped straight into a file or another tool.
 """
 
 import json
@@ -56,11 +56,17 @@ warn_app = typer.Typer(
     help="State WARN notices: layoffs and closures, every one from the states we read.",
     no_args_is_help=True,
 )
+franchises_app = typer.Typer(
+    help="Franchise filings: franchisors' registrations and exemption notices, every one "
+    "from the states we read.",
+    no_args_is_help=True,
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(employers_app, name="employers")
 app.add_typer(bdc_app, name="bdc")
 app.add_typer(companies_app, name="companies")
 app.add_typer(warn_app, name="warn")
+app.add_typer(franchises_app, name="franchises")
 app.add_typer(key_app, name="key")
 
 
@@ -684,15 +690,15 @@ def warn_filters(state, company, employer, q, notice_since, notice_before):
     )
 
 
-def note_unread(body):
+def note_unread(body, states_command="pdatum warn states"):
     """
     The states the server left out of this answer, on stderr, where a count
-    piped into a script never meets it: a state not read yet has no notices
+    piped into a script never meets it: a state not read yet has no records
     here, which is not the same as having none.
     """
     if body.get("unread"):
-        progress("not in this answer, not read yet: %s. Which and why: pdatum warn states"
-                 % ", ".join(s.upper() for s in body["unread"]))
+        progress("not in this answer, not read yet: %s. Which and why: %s"
+                 % (", ".join(s.upper() for s in body["unread"]), states_command))
 
 
 def warn_table(notices):
@@ -809,6 +815,165 @@ def warn_states():
             else:
                 table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "",
                               f"{s['notices']:,}" if s["notices"] else "", "",
+                              f"[dim]{esc(s['unread_because'] or '')}[/dim]")
+        console.print(table)
+        read = sum(1 for s in data if s["read"])
+        console.print(f"[dim]{read} of {len(data)} read[/dim]")
+
+    emit(data, render)
+
+
+# -- franchise filings -------------------------------------------------------------
+
+FRANCHISE_COMPANY = typer.Option(None, "--company", help="A company slug (see: pdatum companies list).")
+FRANCHISE_EMPLOYER = typer.Option(None, "--employer", help="An employer slug (see: pdatum employers list).")
+FRANCHISE_Q = typer.Option(None, "--q", "-q", help="Text in the franchisor's names, as the state wrote them.")
+FRANCHISE_STATUS = typer.Option(None, "--status", help="registered, exempt or terminated.")
+FILED_SINCE = typer.Option(None, "--filed-since", help="2026-09-01, 7d, or epoch seconds.")
+FILED_BEFORE = typer.Option(None, "--filed-before", help="2026-09-01, 7d, or epoch seconds.")
+FRANCHISE_STATES = "pdatum franchises states"
+
+
+def franchise_filters(state, company, employer, q, status, filed_since, filed_before):
+    return dict(
+        state=[s.strip().lower() for s in state] if state else None,
+        company=company, employer=employer, q=q, status=status,
+        filed_since=when(filed_since, "--filed-since"),
+        filed_before=when(filed_before, "--filed-before"),
+    )
+
+
+def note_unread_franchises(body):
+    note_unread(body, FRANCHISE_STATES)
+
+
+def franchise_table(filings):
+    """
+    One row a filing: the franchisor, with its brands on a dim line beneath, so
+    the names keep the width. The address is in --json.
+    """
+    table = Table(show_edge=False, pad_edge=False)
+    for column in ("id", "filed", "state", "status"):
+        table.add_column(column, no_wrap=True)
+    table.add_column("franchisor", overflow="fold", ratio=3)
+    table.add_column("ours", overflow="fold", ratio=2)
+    for f in filings:
+        brands = ", ".join(n["name"] for n in f["names"] if n["kind"] == "trade")
+        franchisor = esc(f["name"]) + (f"\n[dim]{esc(brands)}[/dim]" if brands else "")
+        company = f["company"] and (f["company"] + (" (reviewed)" if f["evidence"] else ""))
+        ours = ", ".join(x for x in (company, f["employer_slug"]) if x)
+        table.add_row(str(f["id"]), day(f["filed_at"]), esc(f["state"].upper()),
+                      esc(f["status"] or ""), franchisor, esc(ours))
+    return table
+
+
+@franchises_app.command("list")
+def franchises_list(
+    state: Optional[List[str]] = STATE, company: Optional[str] = FRANCHISE_COMPANY,
+    employer: Optional[str] = FRANCHISE_EMPLOYER, q: Optional[str] = FRANCHISE_Q,
+    status: Optional[str] = FRANCHISE_STATUS,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=500, help="How many to show."),
+):
+    """
+    The newest filings that match: one page. For all of them, use pull. "ours"
+    is the company a filing links to -- by name, or "(reviewed)" when a person
+    recorded why -- and the employer record its name is.
+    """
+    body = client().get(
+        "/franchises", limit=limit,
+        **franchise_filters(state, company, employer, q, status, filed_since, filed_before),
+    )
+    note_unread_franchises(body)
+
+    def render():
+        console.print(franchise_table(body["data"]))
+        more = " -- pdatum franchises pull for all of them" if body["next_cursor"] else ""
+        console.print(f"[dim]{fraction(len(body['data']), body['total'])}{more}. "
+                      f"Which states are read: {FRANCHISE_STATES}[/dim]", soft_wrap=True)
+
+    emit(body, render)
+
+
+@franchises_app.command("count")
+def franchises_count(
+    state: Optional[List[str]] = STATE, company: Optional[str] = FRANCHISE_COMPANY,
+    employer: Optional[str] = FRANCHISE_EMPLOYER, q: Optional[str] = FRANCHISE_Q,
+    status: Optional[str] = FRANCHISE_STATUS,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+):
+    """How many filings match."""
+    body = client().get(
+        "/franchises/count",
+        **franchise_filters(state, company, employer, q, status, filed_since, filed_before))
+    note_unread_franchises(body)
+    data = dict(body["data"], **({"unread": body["unread"]} if "unread" in body else {}))
+    emit(data, lambda: console.print(f"{data['count']:,}"))
+
+
+@franchises_app.command("pull")
+def franchises_pull(
+    state: Optional[List[str]] = STATE, company: Optional[str] = FRANCHISE_COMPANY,
+    employer: Optional[str] = FRANCHISE_EMPLOYER, q: Optional[str] = FRANCHISE_Q,
+    status: Optional[str] = FRANCHISE_STATUS,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+    max_records: Optional[int] = typer.Option(None, "--max", min=1, help="Stop after this many."),
+):
+    """Every filing that matches, as JSON lines on stdout."""
+    filters = franchise_filters(state, company, employer, q, status, filed_since, filed_before)
+    written = 0
+    for filing in client().pages("/franchises", on_page=pull_progress("filings"),
+                                 on_first=note_unread_franchises, limit=500, **filters):
+        line(filing)
+        written += 1
+        if max_records and written >= max_records:
+            break
+
+
+@franchises_app.command("changes")
+def franchises_changes(
+    since: str = typer.Option(..., "--since", help="2026-09-01, 7d, or epoch seconds."),
+    state: Optional[List[str]] = STATE,
+):
+    """
+    Every filing read for the first time, changed by its state (a termination,
+    a brand added), or newly linked to a company or employer record since then,
+    as JSON lines. Upsert by id. The last line on stderr says what --since to
+    use next time.
+    """
+    start = when(since, "--since")
+    latest = None
+    for filing in client().pages(
+        "/franchises/changes", on_page=pull_progress("changes"), on_first=note_unread_franchises,
+        since=start, limit=500, state=[s.strip().lower() for s in state] if state else None,
+    ):
+        line(filing)
+        latest = filing["changed_at"]
+    resume = (latest - 1) if latest is not None else start
+    progress(f"next time: pdatum franchises changes --since {resume}")
+
+
+@franchises_app.command("states")
+def franchises_states():
+    """
+    Every state, whether we read it or not, and why not. Read this before
+    counting anything by state: a state we don't read isn't one with no
+    franchisors.
+    """
+    data = client().get("/franchises/states")["data"]
+
+    def render():
+        table = Table(show_edge=False, pad_edge=False)
+        for column in ("state", "last read", "filings", "newest", "not read because"):
+            table.add_column(column, overflow="fold")
+        for s in data:
+            if s["read"]:
+                table.add_row(esc(s["state"].upper()), day(s["last_read_at"]),
+                              f"{s['filings']:,}", day(s["last_filed_at"]),
+                              "" if s["last_read_at"] else "[dim]waiting for its first read[/dim]")
+            else:
+                table.add_row(f"[dim]{esc(s['state'].upper())}[/dim]", "",
+                              f"{s['filings']:,}" if s["filings"] else "", "",
                               f"[dim]{esc(s['unread_because'] or '')}[/dim]")
         console.print(table)
         read = sum(1 for s in data if s["read"])
@@ -935,6 +1100,16 @@ A state waiting for its first read answers "Not read yet" (exit 1), never a zero
 and an answer that leaves states out names them on stderr.
 company and employer_slug link a notice to our records when the names are equal,
 which is not proof that it is the same business.
+
+Franchise filings -- franchisors' registrations and exemption notices with the states:
+  pdatum franchises states --json             which states are read, when, and why not the rest
+  pdatum franchises list -q "snap fitness"    or --company SLUG, --status terminated, --state tx
+  pdatum franchises pull --filed-since 90d > franchises.jsonl
+  pdatum franchises changes --since 2026-10-01   new filings, state changes and new links; upsert by id
+names splits the franchisor's legal name from its brands (trade) and former names.
+A franchisor usually files under a company named for its brand, not the company a
+lender holds: company links by name, or by a review whose evidence says why.
+The same rules as warn: check states first, "Not read yet" is never a zero.
 
 Times take 2026-09-01, 7d / 12h / 30m, or epoch seconds.
 Every command takes --json; errors go to stderr, exit code non-zero.
