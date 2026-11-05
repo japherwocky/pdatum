@@ -146,8 +146,8 @@ The filters are `--state` (repeat it for more than one), `--company`,
 
 Before a franchisor sells franchises in some states, it files there: a
 registration, or a notice that it's exempt. pdatum serves every filing from
-every state we read, in one shape. Texas comes first, with every filing back
-to 1985.
+every state we read, in one shape: every Texas filing back to 1985, and every
+franchisor Florida lists, current or lapsed within the year.
 
 ```bash
 pdatum franchises states                      # read this first
@@ -167,7 +167,11 @@ first, a state waiting for its first read says "Not read yet", and an answer
 that leaves states out lists them on stderr.
 
 The filters are `--state`, `--company`, `--employer`, `-q`, `--status`
-(`registered`, `exempt` or `terminated`), `--filed-since` and `--filed-before`.
+(`registered`, `exempt`, `expired` or `terminated`), `--filed-since` and
+`--filed-before`. `expired` is a filing the state renews every year that
+wasn't renewed. With `--json` or `pull`, a Florida filing also carries
+`state_status`, the state's own word for where it stands (such as
+`Closed - Out of Business`), and `expires_at`.
 
 ## Keeping a copy in sync
 

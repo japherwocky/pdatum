@@ -828,7 +828,7 @@ def warn_states():
 FRANCHISE_COMPANY = typer.Option(None, "--company", help="A company slug (see: pdatum companies list).")
 FRANCHISE_EMPLOYER = typer.Option(None, "--employer", help="An employer slug (see: pdatum employers list).")
 FRANCHISE_Q = typer.Option(None, "--q", "-q", help="Text in the franchisor's names, as the state wrote them.")
-FRANCHISE_STATUS = typer.Option(None, "--status", help="registered, exempt or terminated.")
+FRANCHISE_STATUS = typer.Option(None, "--status", help="registered, exempt, expired or terminated.")
 FILED_SINCE = typer.Option(None, "--filed-since", help="2026-09-01, 7d, or epoch seconds.")
 FILED_BEFORE = typer.Option(None, "--filed-before", help="2026-09-01, 7d, or epoch seconds.")
 FRANCHISE_STATES = "pdatum franchises states"
