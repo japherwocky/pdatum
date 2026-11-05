@@ -2,9 +2,10 @@
 
 Job postings, the employers behind them, federal awards to any company, BDC
 lenders' books and the private companies they hold, state WARN layoff notices,
-and franchisors' filings with the states, from the command line. Built for
-scripts and AI agents: everything prints JSON on request, errors go to stderr,
-and large pulls stream JSON lines.
+franchisors' filings with the states, and every private capital raise
+companies have reported to the SEC since 2008, from the command line. Built
+for scripts and AI agents: everything prints JSON on request, errors go to
+stderr, and large pulls stream JSON lines.
 
 pdatum is the data jobwolverine.com and rxraven.com are built on.
 
@@ -68,6 +69,8 @@ pdatum awards "Acme Corp"
 | `pdatum franchises states` | Lists every state, whether we read its franchise filings or not, and why not. |
 | `pdatum franchises list / count / pull [filters]` | Franchisors' registrations and exemption notices with the states, newest first. |
 | `pdatum franchises changes --since T` | Streams every filing read for the first time, changed by its state, or newly linked to one of our records, since `T`. |
+| `pdatum raises list / count / pull [filters]` | Private capital raises from SEC Form D, every one an operating company has filed since 2008, newest first. |
+| `pdatum raises changes --since T` | Streams every raise read for the first time, changed in the SEC's record, or newly linked to one of our records, since `T`. |
 | `pdatum me` | Shows your key, its scopes, and what it has used. |
 | `pdatum skill` | Prints short instructions for an AI agent to save. |
 | `pdatum guide` | Prints the full API reference, from the server. |
@@ -172,6 +175,32 @@ The filters are `--state`, `--company`, `--employer`, `-q`, `--status`
 wasn't renewed. With `--json` or `pull`, a Florida filing also carries
 `state_status`, the state's own word for where it stands (such as
 `Closed - Out of Business`), and `expires_at`.
+
+## Private capital raises
+
+A company that sells shares or notes privately files a Form D with the SEC
+within 15 days of its first sale: how much it's offering, how much it has
+sold, and to how many investors. pdatum serves every Form D an operating
+company has filed since 2008, about 360,000 of them, with a few hundred more
+every business day.
+
+```bash
+pdatum raises list -q "harvey ai"
+pdatum raises pull --industry biotechnology --filed-since 365d --min-sold 50000000 > biotech.jsonl
+pdatum raises pull --company harvey-ai-corporation
+```
+
+Each raise names the issuer, with its SEC CIK and address, and gives the
+amounts the filer reported. A `D/A` amends an earlier filing, usually to
+report more sold, and every filing of one offering shares its `offering`
+number. A raise links to a company or an employer record when the issuer's
+name is theirs: a match on the name, not proof. Every answer's
+`read_through` says how far the filings run. Investment funds file Form Ds
+too, and are left out.
+
+The filters are `--company`, `--employer`, `--cik`, `-q`, `--industry` (the
+SEC's industry groups, such as `Biotechnology`), `--region` (a US state),
+`--min-sold`, `--filed-since` and `--filed-before`.
 
 ## Keeping a copy in sync
 

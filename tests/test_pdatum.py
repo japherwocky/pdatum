@@ -1175,3 +1175,112 @@ class FranchisesTestCase(Isolated):
         self.assertEqual(code, 2)
         self.assertIn("'someday' is not a time", err)
         self.assertEqual(session.calls, [])
+
+
+class RaisesTestCase(Isolated):
+    """pdatum raises: every Form D an operating company has filed with the SEC (wolverine card #917)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["PDATUM_API_KEY"] = KEY
+
+    def raised(self, n, name="Harvey AI Corp", **fields):
+        record = {
+            "id": n, "accession": "0001974654-26-%06d" % n, "form": "D", "amends": None,
+            "offering": "021-597236", "filed_at": 1789084800, "cik": 1974654, "name": name,
+            "names": [{"name": name, "kind": "legal"}], "co_issuers": [],
+            "entity_type": "Corporation", "jurisdiction": "DELAWARE", "incorporated": "2022",
+            "address": "201 THIRD STREET", "city": "SAN FRANCISCO", "region": "CA",
+            "country": None, "zip": "94103", "industry": "Other Technology",
+            "revenue_range": "Decline to Disclose", "exemptions": ["06b"], "securities": ["equity"],
+            "business_combination": False, "first_sale_at": 1787875200,
+            "first_sale_yet_to_occur": False, "offered": None, "offered_indefinite": True,
+            "sold": 550299446, "remaining": None, "min_investment": 0, "investors": 28,
+            "non_accredited_investors": 0, "sales_commissions": 0, "finders_fees": 0,
+            "paid_to_related_persons": 0, "company": None, "matched": None, "employer_slug": None,
+            "source": "https://www.sec.gov/Archives/edgar/data/1974654/x-index.htm",
+            "observed_at": 1793893646, "changed_at": 1793893646 + n,
+        }
+        record.update(fields)
+        return record
+
+    def test_list_sends_the_filters_and_shows_the_money_and_what_is_ours(self):
+        records = [
+            self.raised(1, company="harvey-ai-corporation", matched="Harvey AI Corporation"),
+            self.raised(2, name="Nalu Ltd", city="GEORGE TOWN", region=None,
+                        country="CAYMAN ISLANDS", sold=None, investors=None, form="D/A"),
+        ]
+
+        def answer(path, params):
+            body = pages_of(records, 20)(path, params)._body
+            return FakeResponse(body=dict(body, read_through=1793750400))
+
+        code, out, err, session = self.run_cli(
+            "raises", "list", "--industry", "Other Technology", "--region", "ca", "--cik", "1974654",
+            "--min-sold", "1000000", "--filed-since", "1700000000", "-q", "harvey", answer=answer)
+        self.assertEqual(code, 0, err)
+        path, params = session.calls[0]
+        self.assertEqual(path, "/raises")
+        self.assertEqual(
+            (params["industry"], params["region"], params["cik"], params["min_sold"],
+             params["filed_since"], params["q"]),
+            ("Other Technology", "CA", 1974654, 1000000, 1700000000, "harvey"))
+        # The table folds a long cell, so a place is looked for in pieces.
+        for text in ("2026-09-11", "Harvey AI Corp", "SAN FRANCISCO, CA", "$550,299,446",
+                     "28 investors", "harvey-ai-corporation", "Nalu Ltd", "CAYMAN", "ISLANDS",
+                     "amendment", "read through 2026-11-04"):
+            self.assertIn(text, out)
+
+    def test_hostile_names_print_as_written(self):
+        for name in HOSTILE:
+            with self.subTest(name=name):
+                code, out, err, _ = self.run_cli(
+                    "raises", "list", answer=pages_of([self.raised(1, name=name, city=name)], 20))
+                self.assertEqual(code, 0, err)
+                self.assertIn(name, out)
+
+    def test_pull_streams_every_page(self):
+        records = [self.raised(i) for i in range(3)]
+        code, out, err, session = self.run_cli("raises", "pull", "--company", "harvey-ai-corporation",
+                                               answer=pages_of(records, 2))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([json.loads(x)["id"] for x in out.splitlines()], [0, 1, 2])
+        self.assertEqual(session.calls[0][1]["company"], "harvey-ai-corporation")
+        self.assertIn("pulled 3 of 3 raises", err)
+
+    def test_changes_says_where_to_start_next_time(self):
+        records = [self.raised(i) for i in (1, 2)]
+        code, out, err, session = self.run_cli("raises", "changes", "--since", "1793000000",
+                                               answer=pages_of(records, 20))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/raises/changes", {"since": 1793000000, "limit": 500}))
+        self.assertEqual(len(out.splitlines()), 2)
+        self.assertIn("pdatum raises changes --since 1793893647", err)
+
+    def test_count_prints_the_number_and_json_says_how_far_it_runs(self):
+        answer = lambda p, q: FakeResponse(body={"data": {"count": 360172},
+                                                 "read_through": 1793750400})
+        code, out, err, session = self.run_cli("raises", "count", "--industry", "biotechnology",
+                                               answer=answer)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(session.calls[0], ("/raises/count", {"industry": "biotechnology"}))
+        self.assertEqual(out.strip(), "360,172")
+        code, out, err, _ = self.run_cli("raises", "count", "--json", answer=answer)
+        self.assertEqual(json.loads(out), {"count": 360172, "read_through": 1793750400})
+
+    def test_before_the_first_read_it_is_never_a_zero(self):
+        waiting = lambda p, q: FakeResponse(202, {"data": {"status": "waiting"}},
+                                            {"Retry-After": "3600"})
+        for args in (("count",), ("list",), ("pull",), ("changes", "--since", "1")):
+            with self.subTest(args=args):
+                code, out, err, _ = self.run_cli("raises", *args, answer=waiting)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "")
+                self.assertIn("Not here yet", err)
+
+    def test_a_bad_number_or_time_is_a_usage_error(self):
+        for args in (("--cik", "acme"), ("--min-sold", "-5"), ("--filed-since", "someday")):
+            with self.subTest(args=args):
+                code, _, err, session = self.run_cli("raises", "list", *args)
+                self.assertEqual(code, 2, err)
+                self.assertEqual(session.calls, [])
