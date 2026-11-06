@@ -8,9 +8,9 @@ is off, `--json` and `--api-key` are only taken from where they can be ours
 has to pass through a shell.
 
 Streams -- `jobs pull`, `jobs changes`, `employers pull`, `companies pull`,
-`warn pull`, `warn changes`, `franchises pull`, `franchises changes` -- write
-JSON lines to stdout and progress to stderr, in either mode, so they can be
-piped straight into a file or another tool.
+`warn pull`, `warn changes`, `franchises pull`, `franchises changes`, `raises
+pull`, `raises changes` -- write JSON lines to stdout and progress to stderr,
+in either mode, so they can be piped straight into a file or another tool.
 """
 
 import json
@@ -61,12 +61,18 @@ franchises_app = typer.Typer(
     "from the states we read.",
     no_args_is_help=True,
 )
+raises_app = typer.Typer(
+    help="Private capital raises: every Form D an operating company has filed with the SEC "
+    "since 2008.",
+    no_args_is_help=True,
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(employers_app, name="employers")
 app.add_typer(bdc_app, name="bdc")
 app.add_typer(companies_app, name="companies")
 app.add_typer(warn_app, name="warn")
 app.add_typer(franchises_app, name="franchises")
+app.add_typer(raises_app, name="raises")
 app.add_typer(key_app, name="key")
 
 
@@ -982,6 +988,134 @@ def franchises_states():
     emit(data, render)
 
 
+# -- private capital raises ----------------------------------------------------------
+
+RAISE_COMPANY = typer.Option(None, "--company", help="A company slug (see: pdatum companies list).")
+RAISE_EMPLOYER = typer.Option(None, "--employer", help="An employer slug (see: pdatum employers list).")
+RAISE_CIK = typer.Option(None, "--cik", min=1, help="The issuer's SEC CIK.")
+RAISE_Q = typer.Option(None, "--q", "-q", help="Text in the issuer's name.")
+RAISE_INDUSTRY = typer.Option(
+    None, "--industry", help="One of the SEC's industry groups, like Biotechnology or Restaurants.")
+RAISE_REGION = typer.Option(None, "--region", help="A US state's two letters, like CA.")
+RAISE_MIN_SOLD = typer.Option(None, "--min-sold", min=0, help="Only raises reporting at least this many dollars sold.")
+
+
+def raise_filters(company, employer, cik, q, industry, region, min_sold, filed_since, filed_before):
+    return dict(
+        company=company, employer=employer, cik=cik, q=q, industry=industry,
+        region=region.strip().upper() if region else None, min_sold=min_sold,
+        filed_since=when(filed_since, "--filed-since"),
+        filed_before=when(filed_before, "--filed-before"),
+    )
+
+
+def raise_table(raises):
+    """
+    One row a filing: the issuer, with where it is on a dim line beneath, and
+    how much it has sold, with to how many beneath, so the names keep the
+    width. An amendment says so under its date. Everything else is in --json.
+    """
+    table = Table(show_edge=False, pad_edge=False)
+    for column in ("id", "filed"):
+        table.add_column(column, no_wrap=True)
+    table.add_column("issuer", overflow="fold", ratio=3)
+    table.add_column("sold", no_wrap=True, justify="right")
+    table.add_column("ours", overflow="fold", ratio=2)
+    for r in raises:
+        filed = day(r["filed_at"]) + ("\n[dim]amendment[/dim]" if r["form"] == "D/A" else "")
+        where = ", ".join(x for x in (r["city"], r["region"] or r["country"]) if x)
+        issuer = esc(r["name"]) + (f"\n[dim]{esc(where)}[/dim]" if where else "")
+        sold = money(r["sold"]) + (f"\n[dim]{r['investors']:,} investors[/dim]"
+                                   if r["investors"] is not None else "")
+        ours = ", ".join(x for x in (r["company"], r["employer_slug"]) if x)
+        table.add_row(str(r["id"]), filed, issuer, sold, esc(ours))
+    return table
+
+
+@raises_app.command("list")
+def raises_list(
+    company: Optional[str] = RAISE_COMPANY, employer: Optional[str] = RAISE_EMPLOYER,
+    cik: Optional[int] = RAISE_CIK, q: Optional[str] = RAISE_Q,
+    industry: Optional[str] = RAISE_INDUSTRY, region: Optional[str] = RAISE_REGION,
+    min_sold: Optional[int] = RAISE_MIN_SOLD,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+    limit: int = typer.Option(20, "--limit", "-n", min=1, max=500, help="How many to show."),
+):
+    """
+    The newest raises that match: one page. For all of them, use pull. "ours"
+    is the company and employer record the issuer's name is, when it is one.
+    """
+    body = client().get(
+        "/raises", limit=limit,
+        **raise_filters(company, employer, cik, q, industry, region, min_sold,
+                        filed_since, filed_before),
+    )
+
+    def render():
+        console.print(raise_table(body["data"]))
+        more = " -- pdatum raises pull for all of them" if body["next_cursor"] else ""
+        console.print(f"[dim]{fraction(len(body['data']), body['total'])}{more}. "
+                      f"Filings read through {day(body.get('read_through'))}[/dim]", soft_wrap=True)
+
+    emit(body, render)
+
+
+@raises_app.command("count")
+def raises_count(
+    company: Optional[str] = RAISE_COMPANY, employer: Optional[str] = RAISE_EMPLOYER,
+    cik: Optional[int] = RAISE_CIK, q: Optional[str] = RAISE_Q,
+    industry: Optional[str] = RAISE_INDUSTRY, region: Optional[str] = RAISE_REGION,
+    min_sold: Optional[int] = RAISE_MIN_SOLD,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+):
+    """How many raises match."""
+    body = client().get(
+        "/raises/count",
+        **raise_filters(company, employer, cik, q, industry, region, min_sold,
+                        filed_since, filed_before))
+    data = dict(body["data"], read_through=body.get("read_through"))
+    emit(data, lambda: console.print(f"{data['count']:,}"))
+
+
+@raises_app.command("pull")
+def raises_pull(
+    company: Optional[str] = RAISE_COMPANY, employer: Optional[str] = RAISE_EMPLOYER,
+    cik: Optional[int] = RAISE_CIK, q: Optional[str] = RAISE_Q,
+    industry: Optional[str] = RAISE_INDUSTRY, region: Optional[str] = RAISE_REGION,
+    min_sold: Optional[int] = RAISE_MIN_SOLD,
+    filed_since: Optional[str] = FILED_SINCE, filed_before: Optional[str] = FILED_BEFORE,
+    max_records: Optional[int] = typer.Option(None, "--max", min=1, help="Stop after this many."),
+):
+    """Every raise that matches, as JSON lines on stdout."""
+    filters = raise_filters(company, employer, cik, q, industry, region, min_sold,
+                            filed_since, filed_before)
+    written = 0
+    for record in client().pages("/raises", on_page=pull_progress("raises"), limit=500, **filters):
+        line(record)
+        written += 1
+        if max_records and written >= max_records:
+            break
+
+
+@raises_app.command("changes")
+def raises_changes(
+    since: str = typer.Option(..., "--since", help="2026-09-01, 7d, or epoch seconds."),
+):
+    """
+    Every raise read for the first time, changed in the SEC's record, or newly
+    linked to a company or employer record since then, as JSON lines. Upsert by
+    id. The last line on stderr says what --since to use next time.
+    """
+    start = when(since, "--since")
+    latest = None
+    for record in client().pages("/raises/changes", on_page=pull_progress("changes"),
+                                 since=start, limit=500):
+        line(record)
+        latest = record["changed_at"]
+    resume = (latest - 1) if latest is not None else start
+    progress(f"next time: pdatum raises changes --since {resume}")
+
+
 # -- the key, the server, and you ------------------------------------------------
 
 
@@ -1110,6 +1244,15 @@ names splits the franchisor's legal name from its brands (trade) and former name
 A franchisor usually files under a company named for its brand, not the company a
 lender holds: company links by name, or by a review whose evidence says why.
 The same rules as warn: check states first, "Not read yet" is never a zero.
+
+Private capital raises -- every Form D an operating company has filed with the SEC since 2008:
+  pdatum raises list -q "acme"                or --company SLUG, --cik N, --region CA
+  pdatum raises pull --industry biotechnology --filed-since 365d --min-sold 50000000
+  pdatum raises changes --since 2026-10-01    new raises, SEC updates and new links; upsert by id
+sold, offered and investors are the filer's own; an amendment (form D/A) updates
+them, and every filing of one offering shares its offering number.
+read_through says how far the filings run. Funds and the people named are left out.
+company and employer_slug link by name, as warn does: a lead, not proof.
 
 Times take 2026-09-01, 7d / 12h / 30m, or epoch seconds.
 Every command takes --json; errors go to stderr, exit code non-zero.
