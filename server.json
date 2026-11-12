@@ -16,8 +16,8 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Your pdatum key, as: Bearer pdatum_...",
-          "isRequired": true,
+          "description": "Your pdatum key, as: Bearer pdatum_... Apps that sign in with OAuth ask for it on pdatum's own page instead.",
+          "isRequired": false,
           "isSecret": true
         }
       ]

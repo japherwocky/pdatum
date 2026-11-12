@@ -29,7 +29,9 @@ class ServerJsonTestCase(unittest.TestCase):
         self.assertEqual(remote["url"], "https://pdatum.pearachute.com/mcp")
         (header,) = remote["headers"]
         self.assertEqual(header["name"], "Authorization")
-        self.assertTrue(header["isRequired"])
+        # Optional: an app that signs in with OAuth gets the key from pdatum's
+        # own sign-in page, and needs no header configured.
+        self.assertFalse(header["isRequired"])
         self.assertTrue(header["isSecret"], "a key must never be shown as a plain value")
 
     def test_fits_the_registrys_limits(self):

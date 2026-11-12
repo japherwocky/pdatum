@@ -216,14 +216,20 @@ time. A change can arrive twice, but never not at all.
 ## AI apps (MCP)
 
 AI apps that call tools rather than run commands can use pdatum as an MCP
-server, with the same key:
+server, at:
 
 ```
 https://pdatum.pearachute.com/mcp
-Authorization: Bearer pdatum_...
 ```
 
-In Claude Code:
+In Claude, open **Settings › Connectors**, choose **Add custom connector**,
+name it `pdatum` and paste the address. **Connect** opens a pdatum page that
+asks for your key; paste it and choose **Allow**. ChatGPT connects the same
+way in Developer mode, with OAuth chosen and the client ID and secret left
+empty.
+
+Apps you configure yourself can send the key as a header instead. In Claude
+Code:
 
 ```bash
 claude mcp add --transport http pdatum https://pdatum.pearachute.com/mcp --header "Authorization: Bearer pdatum_..."

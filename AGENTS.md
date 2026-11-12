@@ -59,8 +59,9 @@ repository and `publish-pypi.yml`. Renaming either breaks releases.
 
 The MCP server is jobwolverine's too: `/mcp` on pdatum's host, in
 `api/mcp_server.py` there, with each tool a call to `/api/v1/` using the
-caller's key. Only its registry listing lives here, because this repository is
-public: `server.json`, published by hand with the **Publish to the MCP
+caller's key, and OAuth for the chat apps in `api/oauth.py`, whose token is
+the key the person pastes on its sign-in page. Only its registry listing lives
+here, because this repository is public: `server.json`, published by hand with the **Publish to the MCP
 Registry** workflow (`publish-mcp-registry.yml`), which proves the
 `io.github.japherwocky` namespace with GitHub's OIDC token. The registry takes
 each version once, so bump `version` in `server.json` before publishing a
