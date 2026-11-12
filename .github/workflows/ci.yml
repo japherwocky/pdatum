@@ -9,7 +9,9 @@ on:
 jobs:
   test:
     name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became 26.04, for which setup-python has no 3.9
+    # build, and every run failed there from 6 Nov 2026 until this.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         # the oldest Python pyproject.toml claims, and the one we run
