@@ -1,0 +1,44 @@
+name: Publish to the MCP Registry
+
+# Lists pdatum's hosted MCP server (server.json) in the official registry,
+# registry.modelcontextprotocol.io, as io.github.japherwocky/pdatum. The
+# server itself is jobwolverine's, at https://pdatum.pearachute.com/mcp; the
+# listing lives here because this is pdatum's public repository.
+#
+# Run by hand from the Actions tab: a listing is public, so it goes out on
+# purpose rather than as a side effect of a release. GitHub's OIDC token
+# proves the io.github.japherwocky namespace, so no secret is needed. The
+# registry takes a version once, so bump "version" in server.json before
+# publishing a change to the listing.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Pinned rather than "latest", so a new release of the publisher cannot
+  # change what runs here without a commit. pkanban's workflow pins the same.
+  MCP_PUBLISHER_VERSION: v1.8.1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show what will be listed
+        run: cat server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Sign in with GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish
+        run: ./mcp-publisher publish

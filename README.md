@@ -213,6 +213,35 @@ Upsert each line of `delta.jsonl` by `id`. A line with `"open": false` means
 that job has closed. The last line on stderr gives the `--since` to use next
 time. A change can arrive twice, but never not at all.
 
+## AI apps (MCP)
+
+AI apps that call tools rather than run commands can use pdatum as an MCP
+server, with the same key:
+
+```
+https://pdatum.pearachute.com/mcp
+Authorization: Bearer pdatum_...
+```
+
+In Claude Code:
+
+```bash
+claude mcp add --transport http pdatum https://pdatum.pearachute.com/mcp --header "Authorization: Bearer pdatum_..."
+```
+
+In Cursor, in `~/.cursor/mcp.json`:
+
+```json
+{"mcpServers": {"pdatum": {"url": "https://pdatum.pearachute.com/mcp",
+                           "headers": {"Authorization": "Bearer pdatum_..."}}}}
+```
+
+Its tools search and fetch everything above: jobs, employers, awards, BDC
+books and their tables, the registry, WARN notices, franchise filings and
+raises. Each is one call to the API with your key. For a whole feed, or to
+keep a copy in sync, use the CLI. The tools are listed in
+[the API reference](https://pdatum.pearachute.com/api/v1/docs).
+
 ## Keys and configuration
 
 The key is taken from `--api-key`, then `PDATUM_API_KEY`, then the config

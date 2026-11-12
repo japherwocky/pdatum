@@ -55,6 +55,17 @@ be reused, so check the number before tagging.
 Publishing is trusted publishing: PyPI's publisher for `pdatum` names this
 repository and `publish-pypi.yml`. Renaming either breaks releases.
 
+## MCP
+
+The MCP server is jobwolverine's too: `/mcp` on pdatum's host, in
+`api/mcp_server.py` there, with each tool a call to `/api/v1/` using the
+caller's key. Only its registry listing lives here, because this repository is
+public: `server.json`, published by hand with the **Publish to the MCP
+Registry** workflow (`publish-mcp-registry.yml`), which proves the
+`io.github.japherwocky` namespace with GitHub's OIDC token. The registry takes
+each version once, so bump `version` in `server.json` before publishing a
+change. `tests/test_server_json.py` holds it to the registry's limits.
+
 ## Conventions
 
 `pkanban` (https://github.com/japherwocky/pkanban) is the model this CLI

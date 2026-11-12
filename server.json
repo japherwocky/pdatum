@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.japherwocky/pdatum",
+  "title": "pdatum",
+  "description": "Jobs, employers, WARN notices, franchise filings, Form D raises and BDC books, as tools.",
+  "version": "1.0.0",
+  "websiteUrl": "https://pdatum.pearachute.com",
+  "repository": {
+    "url": "https://github.com/japherwocky/pdatum",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://pdatum.pearachute.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Your pdatum key, as: Bearer pdatum_...",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
